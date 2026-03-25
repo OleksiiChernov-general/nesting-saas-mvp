@@ -17,7 +17,7 @@ export function EmptyState({ onBrowseClick }: EmptyStateProps) {
         onClick={onBrowseClick}
         type="button"
       >
-        Upload DXF
+        Select DXF File
       </button>
     </div>
   );

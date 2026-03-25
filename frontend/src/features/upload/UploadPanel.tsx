@@ -10,7 +10,6 @@ type UploadPanelProps = {
   error: string | null;
   statusMessage: string;
   onFileChange: (file: File | null) => void;
-  onUpload: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 };
 
@@ -21,7 +20,6 @@ export function UploadPanel({
   error,
   statusMessage,
   onFileChange,
-  onUpload,
   inputRef,
 }: UploadPanelProps) {
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -38,14 +36,9 @@ export function UploadPanel({
         onChange={handleChange}
         type="file"
       />
-      <button
-        className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-        disabled={!file || loading}
-        onClick={onUpload}
-        type="button"
-      >
-        {loading ? "Uploading..." : "Upload File"}
-      </button>
+      <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        {file ? `Selected: ${file.name}` : "Select a DXF file to start upload automatically."}
+      </div>
       <StatusMessage message={statusMessage} tone={error ? "error" : importedFileName ? "success" : "neutral"} />
       {importedFileName ? (
         <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Imported: {importedFileName}</div>

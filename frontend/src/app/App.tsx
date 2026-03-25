@@ -161,21 +161,21 @@ export function App() {
   const canShowResult = Boolean(result && job?.state === "SUCCEEDED");
 
   const handleFileChange = (nextFile: File | null) => {
-    setFile(nextFile);
-    setUploadError(null);
-    if (nextFile && importResult) {
-      resetWorkflow(true);
-      setFile(nextFile);
+    if (!nextFile) {
+      resetWorkflow();
+      return;
     }
+    void handleUpload(nextFile);
   };
 
-  const handleUpload = async () => {
-    if (!file) return;
+  const handleUpload = async (nextFile = file) => {
+    if (!nextFile) return;
     resetWorkflow(true);
+    setFile(nextFile);
     setUploading(true);
 
     try {
-      const response = await apiClient.importFile(file);
+      const response = await apiClient.importFile(nextFile);
       setImportResult(response);
       setConnected(true);
     } catch (error) {
@@ -246,8 +246,10 @@ export function App() {
   const uploadStatus = uploading
     ? "Uploading DXF to backend..."
     : importResult
-      ? "Upload succeeded. Continue to cleanup."
-      : "Choose a DXF file and upload it to begin.";
+      ? `Upload succeeded. ${importResult.polygons.length} polygon(s) ready for cleanup.`
+      : file
+        ? "DXF selected. Upload will start automatically."
+        : "Select a DXF file to begin. Upload starts automatically.";
   const cleanupStatus = cleanupLoading
     ? "Cleaning geometry..."
     : cleanupResult
@@ -303,7 +305,6 @@ export function App() {
               inputRef={fileInputRef}
               loading={uploading}
               onFileChange={handleFileChange}
-              onUpload={handleUpload}
               statusMessage={uploadStatus}
             />
             <CleanupPanel
