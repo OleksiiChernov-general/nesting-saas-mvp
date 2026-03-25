@@ -77,7 +77,15 @@ class NestingJobCreateRequest(BaseModel):
 class JobResponse(BaseModel):
     id: UUID
     state: JobState
+    progress: float = 0.0
+    status_message: str | None = None
     error: str | None = None
+    artifact_url: str | None = None
+    created_at: str | None = None
+    queued_at: str | None = None
+    started_at: str | None = None
+    heartbeat_at: str | None = None
+    finished_at: str | None = None
 
 
 class PlacementResponse(BaseModel):

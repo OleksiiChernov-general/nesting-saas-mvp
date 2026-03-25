@@ -13,5 +13,9 @@ def test_create_job(client, sample_job_payload):
 
     assert response.status_code == 202
     body = response.json()
-    assert body["state"] == "CREATED"
+    assert body["state"] == "QUEUED"
+    assert body["progress"] == 0.05
+    assert body["status_message"] == "Job queued for worker execution."
     assert body["error"] is None
+    assert body["artifact_url"] is None
+    assert body["queued_at"] is not None

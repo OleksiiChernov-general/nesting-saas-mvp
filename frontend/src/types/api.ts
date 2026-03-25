@@ -54,8 +54,16 @@ export type NestingJobCreateRequest = {
 
 export type JobResponse = {
   id: string;
-  state: "CREATED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  state: "CREATED" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  progress: number;
+  status_message?: string | null;
   error?: string | null;
+  artifact_url?: string | null;
+  created_at?: string | null;
+  queued_at?: string | null;
+  started_at?: string | null;
+  heartbeat_at?: string | null;
+  finished_at?: string | null;
 };
 
 export type PlacementResponse = {

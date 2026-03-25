@@ -8,7 +8,7 @@ from uuid import UUID
 from app.db import get_session_factory, init_db, wait_for_database
 from app.models import NestingJob
 from app.queue import get_redis, wait_for_redis
-from app.services import run_nesting_job
+from app.services import recover_stale_jobs, run_nesting_job
 from app.settings import get_settings
 from app.storage import ensure_storage
 
@@ -47,6 +47,7 @@ def main() -> None:
     ensure_storage()
     wait_for_database(settings.startup_timeout_seconds)
     init_db()
+    recover_stale_jobs()
     wait_for_redis(settings.startup_timeout_seconds)
     logger.info("Worker started, queue=%s", settings.job_queue_name)
     while True:

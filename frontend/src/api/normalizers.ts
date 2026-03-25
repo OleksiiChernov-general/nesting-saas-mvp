@@ -10,6 +10,7 @@ import type {
   PolygonPayload,
   SheetLayoutResponse,
 } from "../types/api";
+import { API_BASE_URL } from "./config";
 
 function toNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
@@ -80,12 +81,26 @@ export function normalizeCleanupResponse(value: unknown): CleanGeometryResponse 
 export function normalizeJobResponse(value: unknown): JobResponse {
   const record = value as Record<string, unknown> | null;
   const state = toStringValue(record?.state, "FAILED");
+  const artifactUrl =
+    typeof record?.artifact_url === "string"
+      ? record.artifact_url.startsWith("/")
+        ? `${API_BASE_URL}${record.artifact_url}`
+        : record.artifact_url
+      : null;
   return {
     id: toStringValue(record?.id),
-    state: ["CREATED", "RUNNING", "SUCCEEDED", "FAILED"].includes(state)
+    state: ["CREATED", "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"].includes(state)
       ? (state as JobResponse["state"])
       : "FAILED",
+    progress: toNumber(record?.progress),
+    status_message: typeof record?.status_message === "string" ? record.status_message : null,
     error: typeof record?.error === "string" ? record.error : null,
+    artifact_url: artifactUrl,
+    created_at: typeof record?.created_at === "string" ? record.created_at : null,
+    queued_at: typeof record?.queued_at === "string" ? record.queued_at : null,
+    started_at: typeof record?.started_at === "string" ? record.started_at : null,
+    heartbeat_at: typeof record?.heartbeat_at === "string" ? record.heartbeat_at : null,
+    finished_at: typeof record?.finished_at === "string" ? record.finished_at : null,
   };
 }
 

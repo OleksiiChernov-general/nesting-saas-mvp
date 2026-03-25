@@ -14,7 +14,7 @@ import type { CleanGeometryResponse, ImportResponse, JobResponse, NestingResultR
 import { parseInteger, parseNonNegativeNumber, parsePositiveNumber } from "../utils/numbers";
 
 const POLLING_INTERVAL_MS = 1500;
-const POLLING_TIMEOUT_MS = 60000;
+const POLLING_TIMEOUT_MS = 300000;
 
 const defaultForm: NestingFormState = {
   sheetWidth: "100",
@@ -110,7 +110,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!job?.id || (job.state !== "CREATED" && job.state !== "RUNNING")) {
+    if (!job?.id || (job.state !== "QUEUED" && job.state !== "RUNNING" && job.state !== "CREATED")) {
       setPolling(false);
       return;
     }
@@ -141,7 +141,7 @@ export function App() {
           return;
         }
 
-        if (Date.now() > deadline) {
+        if (Date.now() > deadline && (nextJob.state === "QUEUED" || nextJob.state === "RUNNING")) {
           setJobError("The job took too long to finish. Try again or check the backend worker.");
           setPolling(false);
           return;

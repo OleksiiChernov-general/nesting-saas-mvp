@@ -11,6 +11,7 @@ from app.worker import process_next_job
 
 def test_worker_processes_job(client, sample_job_payload):
     create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    assert create_response.json()["state"] == "QUEUED"
     job_id = create_response.json()["id"]
 
     processed = process_next_job(timeout=1)
@@ -21,6 +22,11 @@ def test_worker_processes_job(client, sample_job_payload):
         assert job is not None
         assert job.state == JobState.SUCCEEDED
         assert job.result_path is not None
+        assert job.artifact_path is not None
+        assert job.progress == 1.0
+        assert job.status_message is not None
+        assert job.started_at is not None
+        assert job.finished_at is not None
 
 
 def test_full_integration_flow(client, tmp_path, sample_job_payload):
@@ -65,13 +71,23 @@ def test_full_integration_flow(client, tmp_path, sample_job_payload):
 
     status_response = client.get(f"/v1/nesting/jobs/{job_id}")
     assert status_response.status_code == 200
-    assert status_response.json()["state"] == "SUCCEEDED"
+    status_body = status_response.json()
+    assert status_body["state"] == "SUCCEEDED"
+    assert status_body["progress"] == 1.0
+    assert status_body["artifact_url"] == f"/v1/nesting/jobs/{job_id}/artifact"
+    assert "successfully" in status_body["status_message"].lower()
 
     result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
     assert result_response.status_code == 200
     body = result_response.json()
     assert body["yield"] > 0
     assert body["layouts"]
+
+    artifact_response = client.get(f"/v1/nesting/jobs/{job_id}/artifact")
+    assert artifact_response.status_code == 200
+    assert artifact_response.headers["content-type"].startswith("application/json")
+    assert "attachment; filename=" in artifact_response.headers["content-disposition"]
+    assert artifact_response.json()["job_id"] == job_id
 
 
 def test_worker_failure_is_persisted(client, sample_job_payload):
@@ -91,3 +107,5 @@ def test_worker_failure_is_persisted(client, sample_job_payload):
         assert job is not None
         assert job.state == JobState.FAILED
         assert job.error
+        assert job.finished_at is not None
+        assert job.progress <= 0.95

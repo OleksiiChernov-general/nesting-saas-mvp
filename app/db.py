@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -59,7 +59,67 @@ def wait_for_database(timeout_seconds: int) -> None:
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _migrate_existing_schema()
+
+
+def _migrate_existing_schema() -> None:
+    engine = get_engine()
+    inspector = inspect(engine)
+    if "nesting_jobs" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("nesting_jobs")}
+    statements: list[str] = []
+
+    if engine.dialect.name == "postgresql":
+        statements.extend(
+            [
+                "ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'QUEUED'",
+                "ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'CANCELLED'",
+            ]
+        )
+        if "artifact_path" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN artifact_path VARCHAR(512)")
+        if "status_message" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN status_message TEXT")
+        if "progress" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN progress DOUBLE PRECISION NOT NULL DEFAULT 0")
+        if "queue_attempts" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN queue_attempts INTEGER NOT NULL DEFAULT 0")
+        if "queued_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN queued_at TIMESTAMPTZ")
+        if "started_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN started_at TIMESTAMPTZ")
+        if "heartbeat_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN heartbeat_at TIMESTAMPTZ")
+        if "finished_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN finished_at TIMESTAMPTZ")
+    else:
+        if "artifact_path" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN artifact_path VARCHAR(512)")
+        if "status_message" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN status_message TEXT")
+        if "progress" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN progress FLOAT NOT NULL DEFAULT 0")
+        if "queue_attempts" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN queue_attempts INTEGER NOT NULL DEFAULT 0")
+        if "queued_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN queued_at DATETIME")
+        if "started_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN started_at DATETIME")
+        if "heartbeat_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN heartbeat_at DATETIME")
+        if "finished_at" not in columns:
+            statements.append("ALTER TABLE nesting_jobs ADD COLUMN finished_at DATETIME")
+
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def get_db() -> Generator[Session, None, None]:

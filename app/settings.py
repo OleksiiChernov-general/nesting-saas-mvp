@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     startup_timeout_seconds: int = 30
     queue_block_timeout_seconds: int = 5
     worker_idle_sleep_seconds: float = 0.5
+    job_heartbeat_interval_seconds: float = 2.0
+    stale_job_timeout_seconds: int = 900
 
     model_config = SettingsConfigDict(
         env_prefix="NESTING_",

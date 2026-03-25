@@ -58,6 +58,10 @@ async function request(path: string, init?: RequestInit): Promise<unknown> {
 }
 
 export const apiClient = {
+  artifactUrl(jobId: string): string {
+    return `${API_BASE_URL}/v1/nesting/jobs/${jobId}/artifact`;
+  },
+
   async health(): Promise<HealthResponse> {
     return normalizeHealthResponse(await request("/health"));
   },

@@ -33,5 +33,9 @@ def save_job_result(job_id: UUID, payload: dict) -> Path:
     return target
 
 
+def result_download_name(job_id: UUID) -> str:
+    return f"nesting-result-{job_id}.json"
+
+
 def load_job_result(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
