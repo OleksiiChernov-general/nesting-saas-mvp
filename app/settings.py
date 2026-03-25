@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     app_name: str = "nesting-saas-mvp"
     database_url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/nesting_mvp"
     redis_url: str = "redis://redis:6379/0"
+    cors_allowed_origins: str = "*"
     job_queue_name: str = "nesting:jobs"
     storage_dir: Path = BASE_DIR / "storage"
     geometry_tolerance: float = 0.5
@@ -54,6 +55,13 @@ class Settings(BaseSettings):
     @property
     def normalized_database_url(self) -> str:
         return normalize_database_url(self.database_url)
+
+    @computed_field
+    @property
+    def cors_allowed_origin_list(self) -> list[str]:
+        if self.cors_allowed_origins.strip() == "*":
+            return ["*"]
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
 
 @lru_cache
