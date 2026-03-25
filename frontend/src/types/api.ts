@@ -91,9 +91,13 @@ export type SheetLayoutResponse = {
 export type NestingResultResponse = {
   yield?: number;
   yield_value?: number;
+  yield_ratio?: number;
+  scrap_ratio?: number;
   scrap_area: number;
   used_area: number;
   total_sheet_area: number;
+  parts_placed?: number;
+  layouts_used?: number;
   layouts: SheetLayoutResponse[];
   unplaced_parts: string[];
 };

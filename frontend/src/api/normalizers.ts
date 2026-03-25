@@ -142,12 +142,22 @@ function normalizeLayout(value: unknown, index: number): SheetLayoutResponse | n
 export function normalizeResultResponse(value: unknown): NestingResultResponse {
   const record = value as Record<string, unknown> | null;
   const yieldValue = typeof record?.yield === "number" ? record.yield : toNumber(record?.yield_value);
+  const scrapRatio =
+    typeof record?.scrap_ratio === "number"
+      ? record.scrap_ratio
+      : toNumber(record?.total_sheet_area) > 0
+        ? toNumber(record?.scrap_area) / toNumber(record?.total_sheet_area)
+        : 0;
   return {
     yield: yieldValue,
     yield_value: yieldValue,
+    yield_ratio: typeof record?.yield_ratio === "number" ? record.yield_ratio : yieldValue,
+    scrap_ratio: scrapRatio,
     scrap_area: toNumber(record?.scrap_area),
     used_area: toNumber(record?.used_area),
     total_sheet_area: toNumber(record?.total_sheet_area),
+    parts_placed: toNumber(record?.parts_placed),
+    layouts_used: toNumber(record?.layouts_used),
     layouts: Array.isArray(record?.layouts)
       ? record.layouts.map((item, index) => normalizeLayout(item, index)).filter((item): item is SheetLayoutResponse => item !== null)
       : [],

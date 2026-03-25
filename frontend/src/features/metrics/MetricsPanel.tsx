@@ -17,10 +17,10 @@ export function MetricsPanel({ result }: MetricsPanelProps) {
     );
   }
 
-  const placedParts = result?.layouts.reduce((sum, layout) => sum + layout.placements.length, 0) ?? 0;
-  const layoutCount = result?.layouts.length ?? 0;
-  const yieldValue = result?.yield ?? result?.yield_value ?? 0;
-  const scrapPercent = result?.total_sheet_area ? result.scrap_area / result.total_sheet_area : 0;
+  const placedParts = result?.parts_placed ?? result?.layouts.reduce((sum, layout) => sum + layout.placements.length, 0) ?? 0;
+  const layoutCount = result?.layouts_used ?? result?.layouts.length ?? 0;
+  const yieldValue = result?.yield_ratio ?? result?.yield ?? result?.yield_value ?? 0;
+  const scrapPercent = result?.scrap_ratio ?? (result?.total_sheet_area ? result.scrap_area / result.total_sheet_area : 0);
 
   const metrics = [
     { label: "Yield", value: formatPercent(yieldValue) },

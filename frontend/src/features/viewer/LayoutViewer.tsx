@@ -48,10 +48,12 @@ export function LayoutViewer({
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
 
-  const viewBox = useMemo(
-    () => createViewBox(getPreviewBounds(canShowResult ? activeLayout : null, canShowResult ? [] : safePreviewPolygons)),
+  const previewBounds = useMemo(
+    () => getPreviewBounds(canShowResult ? activeLayout : null, canShowResult ? [] : safePreviewPolygons),
     [activeLayout, canShowResult, safePreviewPolygons],
   );
+  const viewBox = useMemo(() => createViewBox(previewBounds), [previewBounds]);
+  const flipYAxis = previewBounds.minY + previewBounds.maxY;
 
   useEffect(() => {
     setZoom(1);
@@ -120,41 +122,50 @@ export function LayoutViewer({
                     No parts placed on this sheet.
                   </text>
                 ) : null}
-                {activeLayout.placements.map((placement, index) => {
-                  const active = selectedPartId === placement.part_id;
-                  const label = safePartLabel(placement.part_id, index);
-                  return (
-                    <g key={`${label}-${placement.instance}-${index}`}>
+                <g transform={`translate(0 ${flipYAxis}) scale(1 -1)`}>
+                  {activeLayout.placements.map((placement, index) => {
+                    const active = selectedPartId === placement.part_id;
+                    const label = safePartLabel(placement.part_id, index);
+                    return (
                       <path
                         d={buildPolygonPath(placement.polygon)}
                         fill={`${palette[index % palette.length]}33`}
+                        key={`${label}-${placement.instance}-${index}-shape`}
                         onClick={() => setSelectedPartId(label)}
                         stroke={active ? "#0f172a" : palette[index % palette.length]}
                         strokeWidth={active ? 2.4 : 1.25}
                       />
-                      <text
-                        fill="#0f172a"
-                        fontFamily="IBM Plex Mono, monospace"
-                        fontSize="5"
-                        x={placement.x + placement.width / 2}
-                        y={placement.y + placement.height / 2}
-                      >
-                        {label}
-                      </text>
-                    </g>
+                    );
+                  })}
+                </g>
+                {activeLayout.placements.map((placement, index) => {
+                  const label = safePartLabel(placement.part_id, index);
+                  return (
+                    <text
+                      fill="#0f172a"
+                      fontFamily="IBM Plex Mono, monospace"
+                      fontSize="5"
+                      key={`${label}-${placement.instance}-${index}-label`}
+                      x={placement.x + placement.width / 2}
+                      y={flipYAxis - (placement.y + placement.height / 2)}
+                    >
+                      {label}
+                    </text>
                   );
                 })}
               </>
             ) : safePreviewPolygons.length ? (
-              safePreviewPolygons.map((polygon, index) => (
-                <path
-                  d={buildPolygonPath(polygon)}
-                  fill={`${palette[index % palette.length]}22`}
-                  key={`preview-${index}`}
-                  stroke={palette[index % palette.length]}
-                  strokeWidth="1.25"
-                />
-              ))
+              <g transform={`translate(0 ${flipYAxis}) scale(1 -1)`}>
+                {safePreviewPolygons.map((polygon, index) => (
+                  <path
+                    d={buildPolygonPath(polygon)}
+                    fill={`${palette[index % palette.length]}22`}
+                    key={`preview-${index}`}
+                    stroke={palette[index % palette.length]}
+                    strokeWidth="1.25"
+                  />
+                ))}
+              </g>
             ) : (
               <text fill="#64748b" fontSize="8" x="10" y="20">
                 Upload and process a DXF to see geometry here.

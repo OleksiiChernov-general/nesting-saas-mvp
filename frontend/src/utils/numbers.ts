@@ -14,7 +14,12 @@ export function parseInteger(value: string, fallback: number): number {
 }
 
 export function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+  if (!Number.isFinite(value) || value <= 0) return "0.0%";
+  const percent = value * 100;
+  if (percent < 0.1) return "<0.1%";
+  if (percent > 99.9 && percent < 100) return ">99.9%";
+  if (percent < 1) return `${percent.toFixed(2)}%`;
+  return `${percent.toFixed(1)}%`;
 }
 
 export function formatNumber(value: number): string {

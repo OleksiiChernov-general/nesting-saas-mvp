@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from shapely import affinity
 from shapely.geometry import Polygon, box
 
+EPSILON = 1e-6
+
 
 @dataclass
 class PartSpec:
@@ -60,6 +62,37 @@ def _fits(candidate: Polygon, placed: list[Polygon], sheet: SheetSpec, gap: floa
         if candidate_gap.intersection(item_gap).area > 1e-9:
             return False
     return True
+
+
+def _validate_layout_metrics(layouts: list[dict], total_sheet_area: float, used_area: float, scrap_area: float, yield_value: float) -> None:
+    computed_used_area = 0.0
+    computed_sheet_area = 0.0
+
+    for layout in layouts:
+        sheet_area = float(layout["width"]) * float(layout["height"])
+        placement_area = sum(float(placement.polygon.area) for placement in layout["placements"])
+        if abs(layout["used_area"] - placement_area) > EPSILON:
+            raise ValueError("Layout used area does not match placement geometry area")
+        if abs(layout["scrap_area"] - max(sheet_area - placement_area, 0.0)) > EPSILON:
+            raise ValueError("Layout scrap area does not match sheet minus used area")
+
+        for placement in layout["placements"]:
+            min_x, min_y, max_x, max_y = placement.polygon.bounds
+            if min_x < -EPSILON or min_y < -EPSILON or max_x > float(layout["width"]) + EPSILON or max_y > float(layout["height"]) + EPSILON:
+                raise ValueError("Placement polygon exceeds sheet bounds")
+
+        computed_used_area += placement_area
+        computed_sheet_area += sheet_area
+
+    if abs(used_area - computed_used_area) > EPSILON:
+        raise ValueError("Aggregate used area does not match layout totals")
+    if abs(total_sheet_area - computed_sheet_area) > EPSILON:
+        raise ValueError("Aggregate sheet area does not match layout totals")
+    if abs(scrap_area - max(total_sheet_area - used_area, 0.0)) > EPSILON:
+        raise ValueError("Aggregate scrap area does not match sheet minus used area")
+    expected_yield = (used_area / total_sheet_area) if total_sheet_area else 0.0
+    if abs(yield_value - expected_yield) > EPSILON:
+        raise ValueError("Yield does not match used area divided by total sheet area")
 
 
 def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
@@ -143,15 +176,23 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
 
     scrap_area = max(total_sheet_area - used_area, 0.0)
     yield_value = (used_area / total_sheet_area) if total_sheet_area else 0.0
+    parts_placed = sum(len(layout["placements"]) for layout in layouts)
+    layouts_used = len(layouts)
+    scrap_ratio = (scrap_area / total_sheet_area) if total_sheet_area else 0.0
     layouts.sort(key=lambda item: (item["sheet_id"], item["instance"]))
     for layout in layouts:
         layout["placements"].sort(key=lambda item: (item.y, item.x, item.part_id, item.instance))
+    _validate_layout_metrics(layouts, total_sheet_area, used_area, scrap_area, yield_value)
 
     return {
         "yield": yield_value,
+        "yield_ratio": yield_value,
+        "scrap_ratio": scrap_ratio,
         "scrap_area": scrap_area,
         "used_area": used_area,
         "total_sheet_area": total_sheet_area,
+        "parts_placed": parts_placed,
+        "layouts_used": layouts_used,
         "layouts": layouts,
         "unplaced_parts": unplaced,
     }

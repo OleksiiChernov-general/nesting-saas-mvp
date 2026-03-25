@@ -112,9 +112,13 @@ class SheetLayoutResponse(BaseModel):
 
 class NestingResultResponse(BaseModel):
     yield_value: float = Field(alias="yield")
+    yield_ratio: float | None = None
+    scrap_ratio: float | None = None
     scrap_area: float
     used_area: float
     total_sheet_area: float
+    parts_placed: int | None = None
+    layouts_used: int | None = None
     layouts: list[SheetLayoutResponse]
     unplaced_parts: list[str]
 
