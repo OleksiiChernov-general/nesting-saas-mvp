@@ -8,7 +8,7 @@ import { MetricsPanel } from "../features/metrics/MetricsPanel";
 import { type NestingFormState, NestingFormPanel } from "../features/nesting/NestingFormPanel";
 import { JobStatusPanel } from "../features/status/JobStatusPanel";
 import { CleanupPanel } from "../features/upload/CleanupPanel";
-import { UploadPanel } from "../features/upload/UploadPanel";
+import { type UploadedFileItem, UploadPanel } from "../features/upload/UploadPanel";
 import { LayoutViewer } from "../features/viewer/LayoutViewer";
 import type { CleanGeometryResponse, ImportResponse, JobResponse, NestingResultResponse } from "../types/api";
 import { parseInteger, parseNonNegativeNumber, parsePositiveNumber } from "../utils/numbers";
@@ -24,6 +24,10 @@ const defaultForm: NestingFormState = {
   objective: "MAX_YIELD",
 };
 
+type UploadedImportItem = UploadedFileItem & {
+  response?: ImportResponse;
+};
+
 export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollTimeoutRef = useRef<number | null>(null);
@@ -31,7 +35,6 @@ export function App() {
 
   const [healthChecking, setHealthChecking] = useState(true);
   const [connected, setConnected] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [cleanupLoading, setCleanupLoading] = useState(false);
   const [jobLoading, setJobLoading] = useState(false);
@@ -39,28 +42,44 @@ export function App() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
-  const [importResult, setImportResult] = useState<ImportResponse | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedImportItem[]>([]);
   const [cleanupResult, setCleanupResult] = useState<CleanGeometryResponse | null>(null);
   const [job, setJob] = useState<JobResponse | null>(null);
   const [result, setResult] = useState<NestingResultResponse | null>(null);
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
   const [form, setForm] = useState<NestingFormState>(defaultForm);
 
-  const resetWorkflow = (keepFile = false) => {
+  const resetWorkflow = () => {
     if (pollTimeoutRef.current) {
       window.clearTimeout(pollTimeoutRef.current);
       pollTimeoutRef.current = null;
     }
     pollTokenRef.current += 1;
     setPolling(false);
-    if (!keepFile) setFile(null);
     setUploading(false);
     setCleanupLoading(false);
     setJobLoading(false);
     setUploadError(null);
     setCleanupError(null);
     setJobError(null);
-    setImportResult(null);
+    setUploadedFiles([]);
+    setCleanupResult(null);
+    setJob(null);
+    setResult(null);
+    setActiveSheetIndex(0);
+  };
+
+  const resetDownstreamState = () => {
+    if (pollTimeoutRef.current) {
+      window.clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    pollTokenRef.current += 1;
+    setPolling(false);
+    setCleanupLoading(false);
+    setJobLoading(false);
+    setCleanupError(null);
+    setJobError(null);
     setCleanupResult(null);
     setJob(null);
     setResult(null);
@@ -148,6 +167,17 @@ export function App() {
     };
   }, [job?.id, job?.state]);
 
+  const importResult = useMemo<ImportResponse | null>(() => {
+    const parsedFiles = uploadedFiles.filter((file) => file.response);
+    if (parsedFiles.length === 0) return null;
+    return {
+      import_id: parsedFiles.map((file) => file.response?.import_id ?? file.id).join(","),
+      filename: parsedFiles.length === 1 ? parsedFiles[0].name : `${parsedFiles.length} DXF files`,
+      polygons: parsedFiles.flatMap((file) => file.response?.polygons ?? []),
+      invalid_shapes: parsedFiles.flatMap((file) => file.response?.invalid_shapes ?? []),
+    };
+  }, [uploadedFiles]);
+
   const validationErrors = useMemo(() => {
     const errors: Partial<Record<keyof NestingFormState, string>> = {};
     if (!(Number(form.sheetWidth) > 0)) errors.sheetWidth = "Width must be greater than 0.";
@@ -160,30 +190,68 @@ export function App() {
   const previewPolygons = cleanupResult?.polygons ?? importResult?.polygons ?? [];
   const canShowResult = Boolean(result && job?.state === "SUCCEEDED");
 
-  const handleFileChange = (nextFile: File | null) => {
-    if (!nextFile) {
-      resetWorkflow();
-      return;
-    }
-    void handleUpload(nextFile);
-  };
-
-  const handleUpload = async (nextFile = file) => {
-    if (!nextFile) return;
-    resetWorkflow(true);
-    setFile(nextFile);
+  const handleFilesSelected = async (nextFiles: File[]) => {
+    if (nextFiles.length === 0) return;
+    resetDownstreamState();
+    setUploadError(null);
+    const queuedFiles = nextFiles.map((file, index) => ({
+      id: `${file.name}-${file.size}-${Date.now()}-${index}`,
+      name: file.name,
+      status: "selected" as const,
+      polygons: 0,
+      invalidShapes: 0,
+      error: null,
+    }));
+    setUploadedFiles((current) => [...current, ...queuedFiles]);
     setUploading(true);
 
-    try {
-      const response = await apiClient.importFile(nextFile);
-      setImportResult(response);
-      setConnected(true);
-    } catch (error) {
-      setUploadError(getReadableError(error, "Upload failed."));
-      setConnected(false);
-    } finally {
-      setUploading(false);
+    for (let index = 0; index < nextFiles.length; index += 1) {
+      const nextFile = nextFiles[index];
+      const queuedFile = queuedFiles[index];
+      setUploadedFiles((current) =>
+        current.map((file) => (file.id === queuedFile.id ? { ...file, status: "uploading" } : file)),
+      );
+
+      try {
+        const response = await apiClient.importFile(nextFile);
+        setUploadedFiles((current) =>
+          current.map((file) =>
+            file.id === queuedFile.id
+              ? {
+                  ...file,
+                  status: "uploaded",
+                  polygons: response.polygons.length,
+                  invalidShapes: response.invalid_shapes.length,
+                }
+              : file,
+          ),
+        );
+        setUploadedFiles((current) =>
+          current.map((file) =>
+            file.id === queuedFile.id
+              ? {
+                  ...file,
+                  status: "parsed",
+                  response,
+                  polygons: response.polygons.length,
+                  invalidShapes: response.invalid_shapes.length,
+                }
+              : file,
+          ),
+        );
+        setConnected(true);
+      } catch (error) {
+        const message = getReadableError(error, "Upload failed.");
+        setUploadedFiles((current) =>
+          current.map((file) =>
+            file.id === queuedFile.id ? { ...file, status: "failed", error: message } : file,
+          ),
+        );
+        setUploadError(message);
+      }
     }
+
+    setUploading(false);
   };
 
   const handleClean = async () => {
@@ -244,18 +312,20 @@ export function App() {
   };
 
   const uploadStatus = uploading
-    ? "Uploading DXF to backend..."
+    ? "Uploading DXF files to the backend..."
     : importResult
-      ? `Upload succeeded. ${importResult.polygons.length} polygon(s) ready for cleanup.`
-      : file
-        ? "DXF selected. Upload will start automatically."
-        : "Select a DXF file to begin. Upload starts automatically.";
+      ? `Upload succeeded. ${importResult.polygons.length} polygon(s) from ${uploadedFiles.filter((file) => file.response).length} file(s) are ready.`
+      : uploadedFiles.some((file) => file.status === "failed")
+        ? "One or more uploads failed. Review the uploaded-files list."
+        : "Select one or more DXF files to upload parts for one nesting run.";
   const cleanupStatus = cleanupLoading
     ? "Cleaning geometry..."
     : cleanupResult
       ? "Cleanup succeeded. Nesting is now available."
       : !importResult
         ? "Upload a DXF before cleanup."
+        : importResult.polygons.length === 0
+          ? `Cleanup is disabled because the import produced 0 valid polygons. ${importResult.invalid_shapes.length} shape(s) were rejected before cleanup.`
         : "Run geometry cleanup to validate imported polygons.";
   const nestingStatus = jobLoading
     ? "Submitting nesting job..."
@@ -294,17 +364,16 @@ export function App() {
           </div>
         ) : null}
 
-        {!importResult && !file ? <EmptyState onBrowseClick={() => fileInputRef.current?.click()} /> : null}
+        {uploadedFiles.length === 0 ? <EmptyState onBrowseClick={() => fileInputRef.current?.click()} /> : null}
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)_320px]">
           <aside className="space-y-6">
             <UploadPanel
               error={uploadError}
-              file={file}
-              importedFileName={importResult?.filename ?? null}
+              files={uploadedFiles}
               inputRef={fileInputRef}
               loading={uploading}
-              onFileChange={handleFileChange}
+              onFilesSelected={handleFilesSelected}
               statusMessage={uploadStatus}
             />
             <CleanupPanel
