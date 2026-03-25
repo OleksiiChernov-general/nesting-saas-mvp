@@ -37,7 +37,11 @@ export function UploadPanel({
         type="file"
       />
       <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-        {file ? `Selected: ${file.name}` : "Select a DXF file to start upload automatically."}
+        {loading
+          ? `Uploading: ${file?.name ?? "DXF file"}`
+          : file
+            ? `Selected: ${file.name}`
+            : "Select a DXF file to start upload automatically."}
       </div>
       <StatusMessage message={statusMessage} tone={error ? "error" : importedFileName ? "success" : "neutral"} />
       {importedFileName ? (
