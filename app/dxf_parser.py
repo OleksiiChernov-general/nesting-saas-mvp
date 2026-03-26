@@ -53,6 +53,13 @@ class DXFAudit:
     warnings: list[str]
 
 
+@dataclass
+class DXFImportParseResult:
+    polygons: list[Polygon]
+    invalid_shapes: list[InvalidShapeReport]
+    audit: DXFAudit
+
+
 def _arc_points(center: tuple[float, float], radius: float, start_angle: float, end_angle: float) -> list[tuple[float, float]]:
     if end_angle < start_angle:
         end_angle += 360.0
@@ -128,10 +135,12 @@ def _bounds_dict(bounds: tuple[float, float, float, float]) -> dict[str, float]:
     }
 
 
-def audit_dxf_geometry(file_path: str | Path, polygons: list[Polygon]) -> DXFAudit:
-    document = ezdxf.readfile(str(file_path))
-    units_code = document.header.get("$INSUNITS")
-    measurement_raw = document.header.get("$MEASUREMENT")
+def _build_dxf_audit(
+    polygons: list[Polygon],
+    *,
+    units_code: int | None,
+    measurement_raw: int | None,
+) -> DXFAudit:
     measurement_system = (
         "Metric" if measurement_raw == 1 else "Imperial" if measurement_raw == 0 else None
     )
@@ -183,8 +192,16 @@ def audit_dxf_geometry(file_path: str | Path, polygons: list[Polygon]) -> DXFAud
     )
 
 
-def parse_dxf(file_path: str | Path, tolerance: float = 0.5) -> tuple[list[Polygon], list[InvalidShapeReport]]:
+def audit_dxf_geometry(file_path: str | Path, polygons: list[Polygon]) -> DXFAudit:
     document = ezdxf.readfile(str(file_path))
+    return _build_dxf_audit(
+        polygons,
+        units_code=document.header.get("$INSUNITS"),
+        measurement_raw=document.header.get("$MEASUREMENT"),
+    )
+
+
+def _parse_dxf_document(document, tolerance: float) -> tuple[list[Polygon], list[InvalidShapeReport]]:
     modelspace = document.modelspace()
     polygons: list[Polygon] = []
     segments: list[LineString] = []
@@ -263,3 +280,19 @@ def parse_dxf(file_path: str | Path, tolerance: float = 0.5) -> tuple[list[Polyg
     cleaned, cleanup_issues = clean_geometry(polygons, tolerance=tolerance)
     invalid.extend(InvalidShapeReport(source=issue.source, reason=issue.reason) for issue in cleanup_issues)
     return cleaned, invalid
+
+
+def parse_dxf_with_audit(file_path: str | Path, tolerance: float = 0.5) -> DXFImportParseResult:
+    document = ezdxf.readfile(str(file_path))
+    polygons, invalid = _parse_dxf_document(document, tolerance)
+    audit = _build_dxf_audit(
+        polygons,
+        units_code=document.header.get("$INSUNITS"),
+        measurement_raw=document.header.get("$MEASUREMENT"),
+    )
+    return DXFImportParseResult(polygons=polygons, invalid_shapes=invalid, audit=audit)
+
+
+def parse_dxf(file_path: str | Path, tolerance: float = 0.5) -> tuple[list[Polygon], list[InvalidShapeReport]]:
+    result = parse_dxf_with_audit(file_path, tolerance)
+    return result.polygons, result.invalid_shapes

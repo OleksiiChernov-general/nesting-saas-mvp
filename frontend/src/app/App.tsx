@@ -174,27 +174,12 @@ export function App() {
   const importResult = useMemo<ImportResponse | null>(() => {
     const parsedFiles = uploadedFiles.filter((file) => file.response);
     if (parsedFiles.length === 0) return null;
-    const audits = parsedFiles.flatMap((file) => (file.response?.audit ? [file.response.audit] : []));
-    const maxExtent = Math.max(...audits.map((audit) => audit.geometry_stats.max_extent ?? 0), 0);
     return {
       import_id: parsedFiles.map((file) => file.response?.import_id ?? file.id).join(","),
       filename: parsedFiles.length === 1 ? parsedFiles[0].name : `${parsedFiles.length} DXF files`,
       polygons: parsedFiles.flatMap((file) => file.response?.polygons ?? []),
       invalid_shapes: parsedFiles.flatMap((file) => file.response?.invalid_shapes ?? []),
-      audit: audits.length
-        ? {
-            units_code: audits.length === 1 ? audits[0].units_code ?? null : null,
-            detected_units: Array.from(new Set(audits.map((audit) => audit.detected_units).filter(Boolean))).join(", ") || null,
-            measurement_system: Array.from(new Set(audits.map((audit) => audit.measurement_system).filter(Boolean))).join(", ") || null,
-            source_bounds: null,
-            geometry_stats: {
-              polygon_count: parsedFiles.flatMap((file) => file.response?.polygons ?? []).length,
-              total_area: audits.reduce((sum, audit) => sum + audit.geometry_stats.total_area, 0),
-              max_extent: maxExtent,
-            },
-            warnings: audits.flatMap((audit) => audit.warnings),
-          }
-        : null,
+      audit: null,
     };
   }, [uploadedFiles]);
 
@@ -252,57 +237,45 @@ export function App() {
     setUploadedFiles((current) => [...current, ...queuedFiles]);
     setUploading(true);
 
-    for (let index = 0; index < nextFiles.length; index += 1) {
-      const nextFile = nextFiles[index];
-      const queuedFile = queuedFiles[index];
-      setUploadedFiles((current) =>
-        current.map((file) => (file.id === queuedFile.id ? { ...file, status: "uploading" } : file)),
-      );
+    try {
+      for (let index = 0; index < nextFiles.length; index += 1) {
+        const nextFile = nextFiles[index];
+        const queuedFile = queuedFiles[index];
+        setUploadedFiles((current) =>
+          current.map((file) => (file.id === queuedFile.id ? { ...file, status: "uploading" } : file)),
+        );
 
-      try {
-        const response = await apiClient.importFile(nextFile);
-        setUploadedFiles((current) =>
-          current.map((file) =>
-            file.id === queuedFile.id
-              ? {
-                  ...file,
-                  status: "uploaded",
-                  polygons: response.polygons.length,
-                  invalidShapes: response.invalid_shapes.length,
-                  detectedUnits: response.audit?.detected_units ?? null,
-                  auditWarning: response.audit?.warnings[0] ?? null,
-                }
-              : file,
-          ),
-        );
-        setUploadedFiles((current) =>
-          current.map((file) =>
-            file.id === queuedFile.id
-              ? {
-                  ...file,
-                  status: "parsed",
-                  response,
-                  polygons: response.polygons.length,
-                  invalidShapes: response.invalid_shapes.length,
-                  detectedUnits: response.audit?.detected_units ?? null,
-                  auditWarning: response.audit?.warnings[0] ?? null,
-                }
-              : file,
-          ),
-        );
-        setConnected(true);
-      } catch (error) {
-        const message = getReadableError(error, "Upload failed.");
-        setUploadedFiles((current) =>
-          current.map((file) =>
-            file.id === queuedFile.id ? { ...file, status: "failed", error: message } : file,
-          ),
-        );
-        setUploadError(message);
+        try {
+          const response = await apiClient.importFile(nextFile);
+          setUploadedFiles((current) =>
+            current.map((file) =>
+              file.id === queuedFile.id
+                ? {
+                    ...file,
+                    status: "parsed",
+                    response,
+                    polygons: response.polygons.length,
+                    invalidShapes: response.invalid_shapes.length,
+                    detectedUnits: response.audit?.detected_units ?? null,
+                    auditWarning: response.audit?.warnings[0] ?? null,
+                  }
+                : file,
+            ),
+          );
+          setConnected(true);
+        } catch (error) {
+          const message = getReadableError(error, "Upload failed.");
+          setUploadedFiles((current) =>
+            current.map((file) =>
+              file.id === queuedFile.id ? { ...file, status: "failed", error: message } : file,
+            ),
+          );
+          setUploadError(message);
+        }
       }
+    } finally {
+      setUploading(false);
     }
-
-    setUploading(false);
   };
 
   const handleClean = async () => {

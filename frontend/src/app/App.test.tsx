@@ -72,7 +72,6 @@ describe("App", () => {
     expect(runButton).toBeDisabled();
 
     await user.upload(screen.getByLabelText("DXF file"), new File(["dxf"], "sample.dxf", { type: "application/dxf" }));
-    await user.click(screen.getByRole("button", { name: "Upload File" }));
 
     await waitFor(() => expect(cleanButton).toBeEnabled());
     await user.click(cleanButton);
@@ -150,7 +149,6 @@ describe("App", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     await user.upload(screen.getByLabelText("DXF file"), new File(["dxf"], "sample.dxf", { type: "application/dxf" }));
-    await user.click(screen.getByRole("button", { name: "Upload File" }));
     await user.click(await screen.findByRole("button", { name: "Clean Geometry" }));
     await user.click(await screen.findByRole("button", { name: "Run Nesting" }));
 
@@ -201,7 +199,6 @@ describe("App", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     await user.upload(screen.getByLabelText("DXF file"), new File(["dxf"], "sample.dxf", { type: "application/dxf" }));
-    await user.click(screen.getByRole("button", { name: "Upload File" }));
     await user.click(await screen.findByRole("button", { name: "Clean Geometry" }));
     await user.click(await screen.findByRole("button", { name: "Run Nesting" }));
 
@@ -314,8 +311,7 @@ describe("App", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
     await user.upload(screen.getByLabelText("DXF file"), new File(["dxf"], "demo.dxf", { type: "application/dxf" }));
-    await user.click(screen.getByRole("button", { name: "Upload File" }));
-    await waitFor(() => expect(screen.getByText("Imported: demo.dxf")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Upload succeeded\./i)).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Clean Geometry" }));
     await user.click(screen.getByRole("button", { name: "Run Nesting" }));
 
@@ -326,5 +322,41 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("SUCCEEDED")).toBeInTheDocument());
     expect(screen.getByText("Unplaced parts: part-x")).toBeInTheDocument();
     expect(screen.getByText("50.0%")).toBeInTheDocument();
+  });
+
+  it("completes import when audit warnings are present", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/health")) return jsonResponse({ status: "ok" });
+      if (url.endsWith("/v1/files/import")) {
+        return jsonResponse({
+          import_id: "imp-warn",
+          filename: "warning.dxf",
+          polygons: [{ points: [{ x: 0, y: 0 }, { x: 12, y: 0 }, { x: 12, y: 6 }, { x: 0, y: 6 }, { x: 0, y: 0 }] }],
+          invalid_shapes: [],
+          audit: {
+            units_code: 1,
+            detected_units: "Inches",
+            measurement_system: "Imperial",
+            source_bounds: { min_x: 0, min_y: 0, max_x: 12, max_y: 6, width: 12, height: 6 },
+            geometry_stats: { polygon_count: 1, total_area: 72, max_extent: 12 },
+            warnings: ["DXF units are Inches. Enter sheet dimensions in the same units or convert them before nesting."],
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    await user.upload(screen.getByLabelText("DXF file"), new File(["dxf"], "warning.dxf", { type: "application/dxf" }));
+
+    await waitFor(() => expect(screen.getByText(/Upload succeeded\./i)).toBeInTheDocument());
+    expect(screen.getByText("parsed")).toBeInTheDocument();
+    expect(screen.getByText(/Detected units: Inches/i)).toBeInTheDocument();
+    expect(screen.getByText(/DXF units are Inches/i)).toBeInTheDocument();
   });
 });
