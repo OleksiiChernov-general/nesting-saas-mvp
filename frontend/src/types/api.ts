@@ -183,6 +183,6 @@ export type NestingResultResponse = {
   layouts_used?: number;
   layouts: SheetLayoutResponse[];
   unplaced_parts: string[];
-  warnings: string[];
+  warnings?: string[];
   debug?: NestingDebugResponse | null;
 };
