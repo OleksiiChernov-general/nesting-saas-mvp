@@ -66,6 +66,7 @@ class NestingParams(BaseModel):
     gap: float = Field(default=0.0, ge=0)
     rotation: list[Literal[0, 180]] = Field(default_factory=lambda: [0, 180])
     objective: str = "maximize_yield"
+    debug: bool = False
 
 
 class NestingJobCreateRequest(BaseModel):
@@ -110,6 +111,52 @@ class SheetLayoutResponse(BaseModel):
     scrap_area: float
 
 
+class DebugBBox(BaseModel):
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    width: float
+    height: float
+
+
+class DebugSheet(BaseModel):
+    sheet_id: str
+    instance: int
+    width: float
+    height: float
+    area: float
+
+
+class DebugPlacement(BaseModel):
+    placement_id: str
+    part_id: str
+    sheet_id: str
+    instance: int
+    area: float
+    bbox: DebugBBox
+    valid: bool
+    within_sheet: bool
+
+
+class DebugScaleInfo(BaseModel):
+    placement_bounds: DebugBBox | None = None
+    max_extent: float
+    sheet_max_extent: float
+    extent_ratio: float
+    cluster_flagged: bool
+
+
+class NestingDebugResponse(BaseModel):
+    sheet: DebugSheet | None = None
+    sheets: list[DebugSheet]
+    placements: list[DebugPlacement]
+    total_used_area: float
+    total_scrap_area: float
+    scale_info: DebugScaleInfo
+    warnings: list[str]
+
+
 class NestingResultResponse(BaseModel):
     yield_value: float = Field(alias="yield")
     yield_ratio: float | None = None
@@ -121,5 +168,6 @@ class NestingResultResponse(BaseModel):
     layouts_used: int | None = None
     layouts: list[SheetLayoutResponse]
     unplaced_parts: list[str]
+    debug: NestingDebugResponse | None = None
 
     model_config = {"populate_by_name": True}

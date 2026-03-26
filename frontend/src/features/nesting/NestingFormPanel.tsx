@@ -8,6 +8,7 @@ export type NestingFormState = {
   sheetQuantity: string;
   gap: string;
   objective: "MAX_YIELD" | "MIN_SHEETS";
+  debug: boolean;
 };
 
 type NestingFormPanelProps = {
@@ -58,6 +59,10 @@ export function NestingFormPanel({
           <option value="MIN_SHEETS">MIN_SHEETS</option>
         </select>
       </Field>
+      <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <input checked={form.debug} onChange={(event) => onChange("debug", event.target.checked)} type="checkbox" />
+        Return geometry debug payload and bbox overlays
+      </label>
       <button
         className="w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
         disabled={!cleanupReady || loading || Object.values(errors).some(Boolean)}

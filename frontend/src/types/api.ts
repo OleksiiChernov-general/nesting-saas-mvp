@@ -49,6 +49,7 @@ export type NestingJobCreateRequest = {
     gap: number;
     rotation: Array<0 | 180>;
     objective: string;
+    debug?: boolean;
   };
 };
 
@@ -88,6 +89,52 @@ export type SheetLayoutResponse = {
   scrap_area: number;
 };
 
+export type DebugBBox = {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  width: number;
+  height: number;
+};
+
+export type DebugSheet = {
+  sheet_id: string;
+  instance: number;
+  width: number;
+  height: number;
+  area: number;
+};
+
+export type DebugPlacement = {
+  placement_id: string;
+  part_id: string;
+  sheet_id: string;
+  instance: number;
+  area: number;
+  bbox: DebugBBox;
+  valid: boolean;
+  within_sheet: boolean;
+};
+
+export type DebugScaleInfo = {
+  placement_bounds?: DebugBBox | null;
+  max_extent: number;
+  sheet_max_extent: number;
+  extent_ratio: number;
+  cluster_flagged: boolean;
+};
+
+export type NestingDebugResponse = {
+  sheet?: DebugSheet | null;
+  sheets: DebugSheet[];
+  placements: DebugPlacement[];
+  total_used_area: number;
+  total_scrap_area: number;
+  scale_info: DebugScaleInfo;
+  warnings: string[];
+};
+
 export type NestingResultResponse = {
   yield?: number;
   yield_value?: number;
@@ -100,4 +147,5 @@ export type NestingResultResponse = {
   layouts_used?: number;
   layouts: SheetLayoutResponse[];
   unplaced_parts: string[];
+  debug?: NestingDebugResponse | null;
 };

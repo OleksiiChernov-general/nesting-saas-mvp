@@ -22,6 +22,7 @@ const defaultForm: NestingFormState = {
   sheetQuantity: "1",
   gap: "2",
   objective: "MAX_YIELD",
+  debug: true,
 };
 
 type UploadedImportItem = UploadedFileItem & {
@@ -294,7 +295,7 @@ export function App() {
           polygon,
         })),
         sheets: [{ sheet_id: "sheet-1", width, height, quantity }],
-        params: { gap, rotation: [0, 180], objective: form.objective },
+        params: { gap, rotation: [0, 180], objective: form.objective, debug: form.debug },
       });
 
       setJob(response);
@@ -399,6 +400,7 @@ export function App() {
             <LayoutViewer
               activeSheetIndex={activeSheetIndex}
               canShowResult={canShowResult}
+              debug={result?.debug ?? null}
               layouts={result?.layouts ?? []}
               onSheetChange={setActiveSheetIndex}
               previewPolygons={previewPolygons}

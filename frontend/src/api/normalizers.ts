@@ -1,5 +1,9 @@
 import type {
   CleanGeometryResponse,
+  DebugBBox,
+  DebugPlacement,
+  DebugScaleInfo,
+  DebugSheet,
   HealthResponse,
   ImportResponse,
   InvalidShape,
@@ -139,6 +143,59 @@ function normalizeLayout(value: unknown, index: number): SheetLayoutResponse | n
   };
 }
 
+function normalizeDebugBBox(value: unknown): DebugBBox | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    min_x: toNumber(record.min_x),
+    min_y: toNumber(record.min_y),
+    max_x: toNumber(record.max_x),
+    max_y: toNumber(record.max_y),
+    width: toNumber(record.width),
+    height: toNumber(record.height),
+  };
+}
+
+function normalizeDebugSheet(value: unknown, index: number): DebugSheet | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    sheet_id: toStringValue(record.sheet_id, `sheet-${index + 1}`),
+    instance: toNumber(record.instance, index + 1),
+    width: toNumber(record.width),
+    height: toNumber(record.height),
+    area: toNumber(record.area),
+  };
+}
+
+function normalizeDebugPlacement(value: unknown, index: number): DebugPlacement | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const bbox = normalizeDebugBBox(record.bbox);
+  if (!bbox) return null;
+  return {
+    placement_id: toStringValue(record.placement_id, `placement-${index + 1}`),
+    part_id: toStringValue(record.part_id, `part-${index + 1}`),
+    sheet_id: toStringValue(record.sheet_id, "sheet-1"),
+    instance: toNumber(record.instance, 1),
+    area: toNumber(record.area),
+    bbox,
+    valid: Boolean(record.valid),
+    within_sheet: Boolean(record.within_sheet),
+  };
+}
+
+function normalizeDebugScaleInfo(value: unknown): DebugScaleInfo {
+  const record = value as Record<string, unknown> | null;
+  return {
+    placement_bounds: normalizeDebugBBox(record?.placement_bounds),
+    max_extent: toNumber(record?.max_extent),
+    sheet_max_extent: toNumber(record?.sheet_max_extent),
+    extent_ratio: toNumber(record?.extent_ratio),
+    cluster_flagged: Boolean(record?.cluster_flagged),
+  };
+}
+
 export function normalizeResultResponse(value: unknown): NestingResultResponse {
   const record = value as Record<string, unknown> | null;
   const yieldValue = typeof record?.yield === "number" ? record.yield : toNumber(record?.yield_value);
@@ -164,5 +221,27 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
     unplaced_parts: Array.isArray(record?.unplaced_parts)
       ? record.unplaced_parts.map((item, index) => toStringValue(item, `part-${index + 1}`))
       : [],
+    debug:
+      record?.debug && typeof record.debug === "object"
+        ? {
+            sheet: normalizeDebugSheet((record.debug as Record<string, unknown>).sheet, 0),
+            sheets: Array.isArray((record.debug as Record<string, unknown>).sheets)
+              ? ((record.debug as Record<string, unknown>).sheets as unknown[])
+                  .map((item, index) => normalizeDebugSheet(item, index))
+                  .filter((item): item is DebugSheet => item !== null)
+              : [],
+            placements: Array.isArray((record.debug as Record<string, unknown>).placements)
+              ? ((record.debug as Record<string, unknown>).placements as unknown[])
+                  .map((item, index) => normalizeDebugPlacement(item, index))
+                  .filter((item): item is DebugPlacement => item !== null)
+              : [],
+            total_used_area: toNumber((record.debug as Record<string, unknown>).total_used_area),
+            total_scrap_area: toNumber((record.debug as Record<string, unknown>).total_scrap_area),
+            scale_info: normalizeDebugScaleInfo((record.debug as Record<string, unknown>).scale_info),
+            warnings: Array.isArray((record.debug as Record<string, unknown>).warnings)
+              ? ((record.debug as Record<string, unknown>).warnings as unknown[]).map((item, index) => toStringValue(item, `warning-${index + 1}`))
+              : [],
+          }
+        : null,
   };
 }

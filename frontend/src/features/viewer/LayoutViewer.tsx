@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Panel } from "../../components/Panel";
-import type { PolygonPayload, SheetLayoutResponse } from "../../types/api";
+import type { NestingDebugResponse, PolygonPayload, SheetLayoutResponse } from "../../types/api";
 import { buildPolygonPath, createViewBox, getPreviewBounds } from "../../utils/viewer";
 import { SheetNavigator } from "./SheetNavigator";
 
 type LayoutViewerProps = {
   layouts: SheetLayoutResponse[];
+  debug: NestingDebugResponse | null;
   previewPolygons: PolygonPayload[];
   activeSheetIndex: number;
   onSheetChange: (nextIndex: number) => void;
@@ -25,6 +26,7 @@ function safePartLabel(partId: string | undefined, index: number): string {
 
 export function LayoutViewer({
   layouts,
+  debug,
   previewPolygons,
   activeSheetIndex,
   onSheetChange,
@@ -54,6 +56,17 @@ export function LayoutViewer({
   );
   const viewBox = useMemo(() => createViewBox(previewBounds), [previewBounds]);
   const flipYAxis = previewBounds.minY + previewBounds.maxY;
+  const activeDebugSheet = debug?.sheets[activeSheetIndex] ?? null;
+  const activeDebugPlacements = useMemo(
+    () =>
+      activeDebugSheet
+        ? debug?.placements.filter(
+            (placement) =>
+              placement.sheet_id === activeDebugSheet.sheet_id && placement.instance === activeDebugSheet.instance,
+          ) ?? []
+        : [],
+    [activeDebugSheet, debug?.placements],
+  );
 
   useEffect(() => {
     setZoom(1);
@@ -84,7 +97,7 @@ export function LayoutViewer({
               }}
               type="button"
             >
-              Reset
+              Zoom to fit
             </button>
           </div>
         </div>
@@ -138,6 +151,19 @@ export function LayoutViewer({
                     );
                   })}
                 </g>
+                {activeDebugPlacements.map((placement) => (
+                  <rect
+                    fill="none"
+                    height={placement.bbox.height}
+                    key={`${placement.placement_id}-bbox`}
+                    stroke="#ef4444"
+                    strokeDasharray="2 2"
+                    strokeWidth="0.8"
+                    width={placement.bbox.width}
+                    x={placement.bbox.min_x}
+                    y={flipYAxis - placement.bbox.max_y}
+                  />
+                ))}
                 {activeLayout.placements.map((placement, index) => {
                   const label = safePartLabel(placement.part_id, index);
                   return (
@@ -174,6 +200,11 @@ export function LayoutViewer({
           </g>
         </svg>
       </div>
+      {debug?.warnings.length ? (
+        <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          {debug.warnings.join(" ")}
+        </div>
+      ) : null}
     </Panel>
   );
 }
