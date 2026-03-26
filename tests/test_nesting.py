@@ -100,3 +100,20 @@ def test_nesting_debug_payload_reports_geometry_and_scale():
     assert all(item["valid"] is True for item in result["debug"]["placements"])
     assert all(item["within_sheet"] is True for item in result["debug"]["placements"])
     assert result["debug"]["scale_info"]["cluster_flagged"] is False
+
+
+def test_nesting_warns_about_probable_units_mismatch():
+    parts = [
+        PartSpec(part_id="mandala", polygon=Polygon([(0, 0), (7, 0), (7, 7), (0, 7), (0, 0)]), quantity=1),
+    ]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=1000, height=1000, quantity=1)]
+
+    result = nest(
+        parts,
+        sheets,
+        {"gap": 0.0, "rotation": [0], "objective": "maximize_yield", "source_units": "Inches", "source_max_extent": 7.0},
+    )
+
+    assert result["parts_placed"] == 1
+    assert result["warnings"]
+    assert "Possible scale mismatch" in result["warnings"][0]

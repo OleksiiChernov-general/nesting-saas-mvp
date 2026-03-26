@@ -191,6 +191,8 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     gap = float(params.get("gap", 0.0))
     rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 180}] or [0]
     debug_enabled = bool(params.get("debug", False))
+    source_units = params.get("source_units")
+    source_max_extent = float(params["source_max_extent"]) if params.get("source_max_extent") else None
 
     demand: list[tuple[str, Polygon]] = []
     for part in parts:
@@ -277,6 +279,16 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         layout["placements"].sort(key=lambda item: (item.y, item.x, item.part_id, item.instance))
     debug_summary = _validate_layout_metrics(layouts, total_sheet_area, used_area, scrap_area, yield_value)
 
+    warnings: list[str] = []
+    max_sheet_extent = max((max(sheet.width, sheet.height) for sheet in sheets), default=0.0)
+    if source_units in {"Inches", "Feet", "Yards", "Unitless", None} and source_max_extent and max_sheet_extent:
+        scale_ratio = max_sheet_extent / source_max_extent
+        if scale_ratio >= 25:
+            unit_label = source_units or "unknown"
+            warnings.append(
+                f"Possible scale mismatch: source geometry max extent is {source_max_extent:.3f} {unit_label}, while sheet max extent is {max_sheet_extent:.3f}. Verify matching units before trusting yield and scrap."
+            )
+
     result = {
         "yield": yield_value,
         "yield_ratio": yield_value,
@@ -288,6 +300,7 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         "layouts_used": layouts_used,
         "layouts": layouts,
         "unplaced_parts": unplaced,
+        "warnings": warnings,
     }
     if debug_enabled:
         result["debug"] = debug_summary

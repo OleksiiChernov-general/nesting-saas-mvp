@@ -16,11 +16,45 @@ export type InvalidShape = {
   reason: string;
 };
 
+export type BoundsPayload = {
+  min_x: number;
+  min_y: number;
+  max_x: number;
+  max_y: number;
+  width: number;
+  height: number;
+};
+
+export type GeometryStatsPayload = {
+  polygon_count: number;
+  total_area: number;
+  min_width?: number | null;
+  median_width?: number | null;
+  max_width?: number | null;
+  min_height?: number | null;
+  median_height?: number | null;
+  max_height?: number | null;
+  min_area?: number | null;
+  median_area?: number | null;
+  max_area?: number | null;
+  max_extent?: number | null;
+};
+
+export type DXFAuditPayload = {
+  units_code?: number | null;
+  detected_units?: string | null;
+  measurement_system?: string | null;
+  source_bounds?: BoundsPayload | null;
+  geometry_stats: GeometryStatsPayload;
+  warnings: string[];
+};
+
 export type ImportResponse = {
   import_id: string;
   filename: string;
   polygons: PolygonPayload[];
   invalid_shapes: InvalidShape[];
+  audit?: DXFAuditPayload | null;
 };
 
 export type CleanGeometryResponse = {
@@ -50,6 +84,8 @@ export type NestingJobCreateRequest = {
     rotation: Array<0 | 180>;
     objective: string;
     debug?: boolean;
+    source_units?: string | null;
+    source_max_extent?: number | null;
   };
 };
 
@@ -147,5 +183,6 @@ export type NestingResultResponse = {
   layouts_used?: number;
   layouts: SheetLayoutResponse[];
   unplaced_parts: string[];
+  warnings: string[];
   debug?: NestingDebugResponse | null;
 };

@@ -17,7 +17,10 @@ type NestingFormPanelProps = {
   loading: boolean;
   cleanupReady: boolean;
   statusMessage: string;
+  scaleWarning: string | null;
+  scaleWarningAcknowledged: boolean;
   onChange: <K extends keyof NestingFormState>(field: K, value: NestingFormState[K]) => void;
+  onScaleWarningAcknowledged: (acknowledged: boolean) => void;
   onSubmit: () => void;
 };
 
@@ -30,7 +33,10 @@ export function NestingFormPanel({
   loading,
   cleanupReady,
   statusMessage,
+  scaleWarning,
+  scaleWarningAcknowledged,
   onChange,
+  onScaleWarningAcknowledged,
   onSubmit,
 }: NestingFormPanelProps) {
   return (
@@ -63,9 +69,23 @@ export function NestingFormPanel({
         <input checked={form.debug} onChange={(event) => onChange("debug", event.target.checked)} type="checkbox" />
         Return geometry debug payload and bbox overlays
       </label>
+      {scaleWarning ? (
+        <div className="space-y-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="font-semibold">Possible Units / Scale Mismatch</div>
+          <div>{scaleWarning}</div>
+          <label className="flex items-center gap-3">
+            <input
+              checked={scaleWarningAcknowledged}
+              onChange={(event) => onScaleWarningAcknowledged(event.target.checked)}
+              type="checkbox"
+            />
+            I understand the scale warning and still want to run nesting
+          </label>
+        </div>
+      ) : null}
       <button
         className="w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-        disabled={!cleanupReady || loading || Object.values(errors).some(Boolean)}
+        disabled={!cleanupReady || loading || Object.values(errors).some(Boolean) || Boolean(scaleWarning && !scaleWarningAcknowledged)}
         onClick={onSubmit}
         type="button"
       >

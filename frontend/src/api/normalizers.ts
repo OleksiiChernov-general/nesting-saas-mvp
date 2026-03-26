@@ -1,5 +1,6 @@
 import type {
   CleanGeometryResponse,
+  DXFAuditPayload,
   DebugBBox,
   DebugPlacement,
   DebugScaleInfo,
@@ -54,6 +55,52 @@ function normalizeInvalidShapes(value: unknown): InvalidShape[] {
   });
 }
 
+function normalizeBoundsPayload(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    min_x: toNumber(record.min_x),
+    min_y: toNumber(record.min_y),
+    max_x: toNumber(record.max_x),
+    max_y: toNumber(record.max_y),
+    width: toNumber(record.width),
+    height: toNumber(record.height),
+  };
+}
+
+function normalizeGeometryStats(value: unknown) {
+  const record = value as Record<string, unknown> | null;
+  return {
+    polygon_count: toNumber(record?.polygon_count),
+    total_area: toNumber(record?.total_area),
+    min_width: typeof record?.min_width === "number" ? record.min_width : null,
+    median_width: typeof record?.median_width === "number" ? record.median_width : null,
+    max_width: typeof record?.max_width === "number" ? record.max_width : null,
+    min_height: typeof record?.min_height === "number" ? record.min_height : null,
+    median_height: typeof record?.median_height === "number" ? record.median_height : null,
+    max_height: typeof record?.max_height === "number" ? record.max_height : null,
+    min_area: typeof record?.min_area === "number" ? record.min_area : null,
+    median_area: typeof record?.median_area === "number" ? record.median_area : null,
+    max_area: typeof record?.max_area === "number" ? record.max_area : null,
+    max_extent: typeof record?.max_extent === "number" ? record.max_extent : null,
+  };
+}
+
+function normalizeDXFAudit(value: unknown): DXFAuditPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    units_code: typeof record.units_code === "number" ? record.units_code : null,
+    detected_units: typeof record.detected_units === "string" ? record.detected_units : null,
+    measurement_system: typeof record.measurement_system === "string" ? record.measurement_system : null,
+    source_bounds: normalizeBoundsPayload(record.source_bounds),
+    geometry_stats: normalizeGeometryStats(record.geometry_stats),
+    warnings: Array.isArray(record.warnings)
+      ? record.warnings.map((item, index) => toStringValue(item, `warning-${index + 1}`))
+      : [],
+  };
+}
+
 export function normalizeHealthResponse(value: unknown): HealthResponse {
   const record = value as Record<string, unknown> | null;
   return { status: toStringValue(record?.status, "unavailable") };
@@ -68,6 +115,7 @@ export function normalizeImportResponse(value: unknown, fallbackFilename: string
       ? record.polygons.map(normalizePolygon).filter((item): item is PolygonPayload => item !== null)
       : [],
     invalid_shapes: normalizeInvalidShapes(record?.invalid_shapes),
+    audit: normalizeDXFAudit(record?.audit),
   };
 }
 
@@ -220,6 +268,9 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
       : [],
     unplaced_parts: Array.isArray(record?.unplaced_parts)
       ? record.unplaced_parts.map((item, index) => toStringValue(item, `part-${index + 1}`))
+      : [],
+    warnings: Array.isArray(record?.warnings)
+      ? record.warnings.map((item, index) => toStringValue(item, `warning-${index + 1}`))
       : [],
     debug:
       record?.debug && typeof record.debug === "object"

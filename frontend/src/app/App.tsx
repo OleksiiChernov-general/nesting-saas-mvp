@@ -49,6 +49,7 @@ export function App() {
   const [result, setResult] = useState<NestingResultResponse | null>(null);
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
   const [form, setForm] = useState<NestingFormState>(defaultForm);
+  const [scaleWarningAcknowledged, setScaleWarningAcknowledged] = useState(false);
 
   const resetWorkflow = () => {
     if (pollTimeoutRef.current) {
@@ -68,6 +69,7 @@ export function App() {
     setJob(null);
     setResult(null);
     setActiveSheetIndex(0);
+    setScaleWarningAcknowledged(false);
   };
 
   const resetDownstreamState = () => {
@@ -85,6 +87,7 @@ export function App() {
     setJob(null);
     setResult(null);
     setActiveSheetIndex(0);
+    setScaleWarningAcknowledged(false);
   };
 
   useEffect(() => {
@@ -171,11 +174,27 @@ export function App() {
   const importResult = useMemo<ImportResponse | null>(() => {
     const parsedFiles = uploadedFiles.filter((file) => file.response);
     if (parsedFiles.length === 0) return null;
+    const audits = parsedFiles.flatMap((file) => (file.response?.audit ? [file.response.audit] : []));
+    const maxExtent = Math.max(...audits.map((audit) => audit.geometry_stats.max_extent ?? 0), 0);
     return {
       import_id: parsedFiles.map((file) => file.response?.import_id ?? file.id).join(","),
       filename: parsedFiles.length === 1 ? parsedFiles[0].name : `${parsedFiles.length} DXF files`,
       polygons: parsedFiles.flatMap((file) => file.response?.polygons ?? []),
       invalid_shapes: parsedFiles.flatMap((file) => file.response?.invalid_shapes ?? []),
+      audit: audits.length
+        ? {
+            units_code: audits.length === 1 ? audits[0].units_code ?? null : null,
+            detected_units: Array.from(new Set(audits.map((audit) => audit.detected_units).filter(Boolean))).join(", ") || null,
+            measurement_system: Array.from(new Set(audits.map((audit) => audit.measurement_system).filter(Boolean))).join(", ") || null,
+            source_bounds: null,
+            geometry_stats: {
+              polygon_count: parsedFiles.flatMap((file) => file.response?.polygons ?? []).length,
+              total_area: audits.reduce((sum, audit) => sum + audit.geometry_stats.total_area, 0),
+              max_extent: maxExtent,
+            },
+            warnings: audits.flatMap((audit) => audit.warnings),
+          }
+        : null,
     };
   }, [uploadedFiles]);
 
@@ -190,6 +209,31 @@ export function App() {
 
   const previewPolygons = cleanupResult?.polygons ?? importResult?.polygons ?? [];
   const canShowResult = Boolean(result && job?.state === "SUCCEEDED");
+  const importAudit = useMemo(() => {
+    if (!uploadedFiles.length) return null;
+    const audits = uploadedFiles.flatMap((file) => (file.response?.audit ? [file.response.audit] : []));
+    if (audits.length === 0) return null;
+    const detectedUnits = Array.from(new Set(audits.map((audit) => audit.detected_units).filter(Boolean)));
+    const warnings = audits.flatMap((audit) => audit.warnings);
+    const maxExtent = Math.max(...audits.map((audit) => audit.geometry_stats.max_extent ?? 0));
+    const totalArea = audits.reduce((sum, audit) => sum + audit.geometry_stats.total_area, 0);
+    return { detectedUnits, warnings, maxExtent, totalArea };
+  }, [uploadedFiles]);
+  const scaleWarning = useMemo(() => {
+    if (!importAudit) return null;
+    const width = Number(form.sheetWidth);
+    const height = Number(form.sheetHeight);
+    const sheetMaxExtent = Math.max(Number.isFinite(width) ? width : 0, Number.isFinite(height) ? height : 0);
+    if (!(sheetMaxExtent > 0) || !(importAudit.maxExtent > 0)) return importAudit.warnings[0] ?? null;
+    const ratio = sheetMaxExtent / importAudit.maxExtent;
+    if (ratio < 25) return importAudit.warnings[0] ?? null;
+    const units = importAudit.detectedUnits.length ? importAudit.detectedUnits.join(", ") : "unknown units";
+    return `Detected source units: ${units}. Largest imported part extent is ${importAudit.maxExtent.toFixed(3)}, while the sheet max extent is ${sheetMaxExtent.toFixed(3)}. Ratio: ${ratio.toFixed(1)}x. This usually means DXF units and sheet units do not match.`;
+  }, [form.sheetHeight, form.sheetWidth, importAudit]);
+
+  useEffect(() => {
+    setScaleWarningAcknowledged(false);
+  }, [scaleWarning]);
 
   const handleFilesSelected = async (nextFiles: File[]) => {
     if (nextFiles.length === 0) return;
@@ -202,6 +246,8 @@ export function App() {
       polygons: 0,
       invalidShapes: 0,
       error: null,
+      detectedUnits: null,
+      auditWarning: null,
     }));
     setUploadedFiles((current) => [...current, ...queuedFiles]);
     setUploading(true);
@@ -223,6 +269,8 @@ export function App() {
                   status: "uploaded",
                   polygons: response.polygons.length,
                   invalidShapes: response.invalid_shapes.length,
+                  detectedUnits: response.audit?.detected_units ?? null,
+                  auditWarning: response.audit?.warnings[0] ?? null,
                 }
               : file,
           ),
@@ -236,6 +284,8 @@ export function App() {
                   response,
                   polygons: response.polygons.length,
                   invalidShapes: response.invalid_shapes.length,
+                  detectedUnits: response.audit?.detected_units ?? null,
+                  auditWarning: response.audit?.warnings[0] ?? null,
                 }
               : file,
           ),
@@ -295,7 +345,14 @@ export function App() {
           polygon,
         })),
         sheets: [{ sheet_id: "sheet-1", width, height, quantity }],
-        params: { gap, rotation: [0, 180], objective: form.objective, debug: form.debug },
+        params: {
+          gap,
+          rotation: [0, 180],
+          objective: form.objective,
+          debug: form.debug,
+          source_units: importAudit?.detectedUnits.join(", ") ?? null,
+          source_max_extent: importAudit?.maxExtent ?? null,
+        },
       });
 
       setJob(response);
@@ -391,7 +448,10 @@ export function App() {
               form={form}
               loading={jobLoading}
               onChange={handleFormChange}
+              onScaleWarningAcknowledged={setScaleWarningAcknowledged}
               onSubmit={handleRunJob}
+              scaleWarning={scaleWarning}
+              scaleWarningAcknowledged={scaleWarningAcknowledged}
               statusMessage={nestingStatus}
             />
           </aside>

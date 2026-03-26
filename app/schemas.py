@@ -31,11 +31,45 @@ class InvalidShape(BaseModel):
     reason: str
 
 
+class BoundsPayload(BaseModel):
+    min_x: float
+    min_y: float
+    max_x: float
+    max_y: float
+    width: float
+    height: float
+
+
+class GeometryStatsPayload(BaseModel):
+    polygon_count: int
+    total_area: float
+    min_width: float | None = None
+    median_width: float | None = None
+    max_width: float | None = None
+    min_height: float | None = None
+    median_height: float | None = None
+    max_height: float | None = None
+    min_area: float | None = None
+    median_area: float | None = None
+    max_area: float | None = None
+    max_extent: float | None = None
+
+
+class DXFAuditPayload(BaseModel):
+    units_code: int | None = None
+    detected_units: str | None = None
+    measurement_system: str | None = None
+    source_bounds: BoundsPayload | None = None
+    geometry_stats: GeometryStatsPayload
+    warnings: list[str] = Field(default_factory=list)
+
+
 class ImportResponse(BaseModel):
     import_id: str
     filename: str
     polygons: list[PolygonPayload]
     invalid_shapes: list[InvalidShape]
+    audit: DXFAuditPayload | None = None
 
 
 class CleanGeometryRequest(BaseModel):
@@ -67,6 +101,8 @@ class NestingParams(BaseModel):
     rotation: list[Literal[0, 180]] = Field(default_factory=lambda: [0, 180])
     objective: str = "maximize_yield"
     debug: bool = False
+    source_units: str | None = None
+    source_max_extent: float | None = Field(default=None, gt=0)
 
 
 class NestingJobCreateRequest(BaseModel):
@@ -168,6 +204,7 @@ class NestingResultResponse(BaseModel):
     layouts_used: int | None = None
     layouts: list[SheetLayoutResponse]
     unplaced_parts: list[str]
+    warnings: list[str] = Field(default_factory=list)
     debug: NestingDebugResponse | None = None
 
     model_config = {"populate_by_name": True}

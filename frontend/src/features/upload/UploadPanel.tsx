@@ -12,6 +12,8 @@ export type UploadedFileItem = {
   polygons: number;
   invalidShapes: number;
   error: string | null;
+  detectedUnits?: string | null;
+  auditWarning?: string | null;
 };
 
 type UploadPanelProps = {
@@ -85,6 +87,10 @@ export function UploadPanel({
                   <div className="mt-1 text-xs text-slate-500">
                     Polygons: {file.polygons} | Invalid shapes: {file.invalidShapes}
                   </div>
+                  {file.detectedUnits ? (
+                    <div className="mt-1 text-xs text-slate-500">Detected units: {file.detectedUnits}</div>
+                  ) : null}
+                  {file.auditWarning ? <div className="mt-2 text-xs text-amber-700">{file.auditWarning}</div> : null}
                   {file.error ? <div className="mt-2 text-xs text-rose-700">{file.error}</div> : null}
                 </div>
                 <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusClassName[file.status]}`}>

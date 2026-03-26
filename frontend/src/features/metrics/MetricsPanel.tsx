@@ -46,6 +46,11 @@ export function MetricsPanel({ result }: MetricsPanelProps) {
           Unplaced parts: {result.unplaced_parts.join(", ")}
         </div>
       ) : null}
+      {result?.warnings.length ? (
+        <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          {result.warnings.join(" ")}
+        </div>
+      ) : null}
     </Panel>
   );
 }

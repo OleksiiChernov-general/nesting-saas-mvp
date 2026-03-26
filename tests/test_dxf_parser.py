@@ -4,7 +4,7 @@ from pathlib import Path
 
 import ezdxf
 
-from app.dxf_parser import parse_dxf
+from app.dxf_parser import audit_dxf_geometry, parse_dxf
 
 
 def test_parse_dxf_returns_closed_polygon_and_invalid_shapes(tmp_path: Path):
@@ -37,3 +37,22 @@ def test_parse_dxf_recovers_near_closed_open_polyline(tmp_path: Path):
     assert len(polygons) == 1
     assert polygons[0].area > 0
     assert invalid_shapes == []
+
+
+def test_audit_dxf_geometry_reports_inches_warning(tmp_path: Path):
+    file_path = tmp_path / "inches_circle.dxf"
+    doc = ezdxf.new(setup=True)
+    doc.header["$INSUNITS"] = 1
+    doc.header["$MEASUREMENT"] = 0
+    msp = doc.modelspace()
+    msp.add_circle((0, 0), radius=3.5)
+    doc.saveas(file_path)
+
+    polygons, _ = parse_dxf(file_path)
+    audit = audit_dxf_geometry(file_path, polygons)
+
+    assert audit.detected_units == "Inches"
+    assert audit.measurement_system == "Imperial"
+    assert audit.geometry_stats["polygon_count"] == 1
+    assert audit.geometry_stats["max_extent"] is not None
+    assert any("Enter sheet dimensions in the same units" in warning for warning in audit.warnings)

@@ -11,7 +11,7 @@ from shapely.geometry import Polygon
 from sqlalchemy.orm import Session
 
 from app.db import get_session_factory
-from app.dxf_parser import parse_dxf
+from app.dxf_parser import audit_dxf_geometry, parse_dxf
 from app.geometry import clean_geometry as clean_geometry_impl, polygon_from_points, polygon_to_points
 from app.models import JobState, NestingJob
 from app.nesting import PartSpec, SheetSpec, nest
@@ -35,11 +35,13 @@ def utcnow() -> datetime:
 
 def import_dxf(file_path: str, filename: str, import_id: str, tolerance: float) -> ImportResponse:
     polygons, invalid_shapes = parse_dxf(file_path, tolerance=tolerance)
+    audit = audit_dxf_geometry(file_path, polygons)
     return ImportResponse(
         import_id=import_id,
         filename=filename,
         polygons=[{"points": [{"x": x, "y": y} for x, y in polygon_to_points(poly)]} for poly in polygons],
         invalid_shapes=[InvalidShape(source=item.source, reason=item.reason) for item in invalid_shapes],
+        audit=audit.__dict__,
     )
 
 

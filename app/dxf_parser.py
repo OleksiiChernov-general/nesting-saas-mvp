@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,41 @@ from app.geometry import clean_geometry, dedupe_segments
 class InvalidShapeReport:
     source: str
     reason: str
+
+
+UNIT_MAP = {
+    0: "Unitless",
+    1: "Inches",
+    2: "Feet",
+    3: "Miles",
+    4: "Millimeters",
+    5: "Centimeters",
+    6: "Meters",
+    7: "Kilometers",
+    8: "Microinches",
+    9: "Mils",
+    10: "Yards",
+    11: "Angstroms",
+    12: "Nanometers",
+    13: "Microns",
+    14: "Decimeters",
+    15: "Decameters",
+    16: "Hectometers",
+    17: "Gigameters",
+    18: "Astronomical units",
+    19: "Light years",
+    20: "Parsecs",
+}
+
+
+@dataclass
+class DXFAudit:
+    units_code: int | None
+    detected_units: str | None
+    measurement_system: str | None
+    source_bounds: dict | None
+    geometry_stats: dict
+    warnings: list[str]
 
 
 def _arc_points(center: tuple[float, float], radius: float, start_angle: float, end_angle: float) -> list[tuple[float, float]]:
@@ -78,6 +114,73 @@ def _append_polygon_or_segments(
             return
 
     segments.extend(_segments_from_points(candidate_points))
+
+
+def _bounds_dict(bounds: tuple[float, float, float, float]) -> dict[str, float]:
+    min_x, min_y, max_x, max_y = bounds
+    return {
+        "min_x": float(min_x),
+        "min_y": float(min_y),
+        "max_x": float(max_x),
+        "max_y": float(max_y),
+        "width": float(max_x - min_x),
+        "height": float(max_y - min_y),
+    }
+
+
+def audit_dxf_geometry(file_path: str | Path, polygons: list[Polygon]) -> DXFAudit:
+    document = ezdxf.readfile(str(file_path))
+    units_code = document.header.get("$INSUNITS")
+    measurement_raw = document.header.get("$MEASUREMENT")
+    measurement_system = (
+        "Metric" if measurement_raw == 1 else "Imperial" if measurement_raw == 0 else None
+    )
+
+    widths = [poly.bounds[2] - poly.bounds[0] for poly in polygons]
+    heights = [poly.bounds[3] - poly.bounds[1] for poly in polygons]
+    areas = [poly.area for poly in polygons]
+    source_bounds = None
+    if polygons:
+        source_bounds = _bounds_dict(
+            (
+                min(poly.bounds[0] for poly in polygons),
+                min(poly.bounds[1] for poly in polygons),
+                max(poly.bounds[2] for poly in polygons),
+                max(poly.bounds[3] for poly in polygons),
+            )
+        )
+
+    max_extent = max([*widths, *heights], default=0.0)
+    geometry_stats = {
+        "polygon_count": len(polygons),
+        "total_area": float(sum(areas)),
+        "min_width": float(min(widths)) if widths else None,
+        "median_width": float(statistics.median(widths)) if widths else None,
+        "max_width": float(max(widths)) if widths else None,
+        "min_height": float(min(heights)) if heights else None,
+        "median_height": float(statistics.median(heights)) if heights else None,
+        "max_height": float(max(heights)) if heights else None,
+        "min_area": float(min(areas)) if areas else None,
+        "median_area": float(statistics.median(areas)) if areas else None,
+        "max_area": float(max(areas)) if areas else None,
+        "max_extent": float(max_extent) if polygons else None,
+    }
+
+    warnings: list[str] = []
+    detected_units = UNIT_MAP.get(units_code) if units_code is not None else None
+    if detected_units in {"Inches", "Feet", "Yards"}:
+        warnings.append(f"DXF units are {detected_units}. Enter sheet dimensions in the same units or convert them before nesting.")
+    elif detected_units in {None, "Unitless"}:
+        warnings.append("DXF units are missing or unitless. Verify that sheet dimensions use the same scale before nesting.")
+
+    return DXFAudit(
+        units_code=units_code,
+        detected_units=detected_units,
+        measurement_system=measurement_system,
+        source_bounds=source_bounds,
+        geometry_stats=geometry_stats,
+        warnings=warnings,
+    )
 
 
 def parse_dxf(file_path: str | Path, tolerance: float = 0.5) -> tuple[list[Polygon], list[InvalidShapeReport]]:
