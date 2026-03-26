@@ -7,7 +7,7 @@ import { SheetNavigator } from "./SheetNavigator";
 
 type LayoutViewerProps = {
   layouts: SheetLayoutResponse[];
-  debug: NestingDebugResponse | null;
+  debug?: NestingDebugResponse | null;
   previewPolygons: PolygonPayload[];
   activeSheetIndex: number;
   onSheetChange: (nextIndex: number) => void;
