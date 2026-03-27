@@ -201,6 +201,9 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
                 part_id=part.part_id,
                 polygon=polygon_from_points([(point.x, point.y) for point in part.polygon.points]),
                 quantity=part.quantity,
+                filename=part.filename,
+                enabled=part.enabled,
+                fill_only=part.fill_only,
             )
             for part in payload.parts
         ]
@@ -210,7 +213,7 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
         ]
         update_job_status(job.id, state=JobState.RUNNING, progress=0.55, status_message="Computing nesting layout.")
         started = time.perf_counter()
-        result = nest(parts, sheets, payload.params.model_dump())
+        result = nest(parts, sheets, {**payload.params.model_dump(), "mode": payload.mode})
         duration_seconds = round(time.perf_counter() - started, 3)
         serializable = {
             **result,

@@ -53,10 +53,14 @@ def client(app_env):
 @pytest.fixture()
 def sample_job_payload():
     return {
+        "mode": "batch_quantity",
         "parts": [
             {
                 "part_id": "part-a",
+                "filename": "part-a.dxf",
                 "quantity": 2,
+                "enabled": True,
+                "fill_only": False,
                 "polygon": {
                     "points": [
                         {"x": 0, "y": 0},

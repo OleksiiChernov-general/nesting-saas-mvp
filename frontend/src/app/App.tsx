@@ -17,6 +17,7 @@ const POLLING_INTERVAL_MS = 1500;
 const POLLING_TIMEOUT_MS = 300000;
 
 const defaultForm: NestingFormState = {
+  nestingMode: "fill_sheet",
   sheetWidth: "100",
   sheetHeight: "100",
   sheetQuantity: "1",
@@ -312,9 +313,10 @@ export function App() {
       const gap = parseNonNegativeNumber(form.gap, 0);
 
       const response = await apiClient.createJob({
+        mode: form.nestingMode,
         parts: cleanupResult.polygons.map((polygon, index) => ({
           part_id: `part-${index + 1}`,
-          quantity: 1,
+          quantity: form.nestingMode === "fill_sheet" ? 1 : 1,
           polygon,
         })),
         sheets: [{ sheet_id: "sheet-1", width, height, quantity }],

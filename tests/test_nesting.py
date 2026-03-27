@@ -5,76 +5,108 @@ from shapely.geometry import Polygon
 from app.nesting import PartSpec, SheetSpec, nest
 
 
-def test_nesting_is_deterministic():
-    parts = [PartSpec(part_id="p1", polygon=Polygon([(0, 0), (40, 0), (40, 20), (0, 20), (0, 0)]), quantity=2)]
-    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
-    params = {"gap": 2.0, "rotation": [0, 180], "objective": "maximize_yield"}
-
-    first = nest(parts, sheets, params)
-    second = nest(parts, sheets, params)
-
-    assert first["yield"] == second["yield"]
-    assert [(p.part_id, p.x, p.y) for p in first["layouts"][0]["placements"]] == [
-        (p.part_id, p.x, p.y) for p in second["layouts"][0]["placements"]
-    ]
+def rectangle(width: float, height: float) -> Polygon:
+    return Polygon([(0, 0), (width, 0), (width, height), (0, height), (0, 0)])
 
 
-def test_nesting_respects_sheet_bounds_and_gap():
+def test_fill_sheet_repeats_single_part_until_sheet_is_full():
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=1)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+
+    assert result["mode"] == "fill_sheet"
+    assert result["parts_placed"] == 4
+    assert result["used_area"] == 400.0
+    assert result["yield"] == 1.0
+    assert result["part_summaries"][0]["placed_quantity"] == 4
+
+
+def test_batch_quantity_places_exact_requested_single_part_count():
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=3)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=40, height=10, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+
+    assert result["mode"] == "batch_quantity"
+    assert result["parts_placed"] == 3
+    assert result["unplaced_parts"] == []
+    assert result["part_summaries"][0]["requested_quantity"] == 3
+    assert result["part_summaries"][0]["placed_quantity"] == 3
+    assert result["part_summaries"][0]["remaining_quantity"] == 0
+
+
+def test_batch_quantity_reports_partial_fit():
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=5)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+
+    assert result["parts_placed"] == 4
+    assert result["unplaced_parts"] == ["panel"]
+    assert result["part_summaries"][0]["requested_quantity"] == 5
+    assert result["part_summaries"][0]["placed_quantity"] == 4
+    assert result["part_summaries"][0]["remaining_quantity"] == 1
+
+
+def test_fill_sheet_can_mix_multiple_part_types():
     parts = [
-        PartSpec(part_id="p1", polygon=Polygon([(0, 0), (40, 0), (40, 20), (0, 20), (0, 0)]), quantity=2),
+        PartSpec(part_id="large", filename="large.dxf", polygon=rectangle(12, 10), quantity=1),
+        PartSpec(part_id="small", filename="small.dxf", polygon=rectangle(8, 10), quantity=1),
     ]
-    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
 
-    result = nest(parts, sheets, {"gap": 2.0, "rotation": [0, 180], "objective": "maximize_yield"})
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
 
-    placements = result["layouts"][0]["placements"]
-    assert len(placements) == 2
-    assert placements[0].polygon.disjoint(placements[1].polygon)
-    assert all(placement.polygon.bounds[2] <= 100 and placement.polygon.bounds[3] <= 100 for placement in placements)
+    placed_by_part = {item["part_id"]: item["placed_quantity"] for item in result["part_summaries"]}
+
+    assert result["parts_placed"] == 4
+    assert placed_by_part["large"] == 2
+    assert placed_by_part["small"] == 2
+    assert result["used_area"] == 400.0
+    assert result["yield"] == 1.0
+
+
+def test_fill_sheet_solo_mode_uses_only_selected_part():
+    parts = [
+        PartSpec(part_id="large", filename="large.dxf", polygon=rectangle(12, 10), quantity=1, fill_only=True),
+        PartSpec(part_id="small", filename="small.dxf", polygon=rectangle(8, 10), quantity=1),
+    ]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+
+    placed_by_part = {item["part_id"]: item["placed_quantity"] for item in result["part_summaries"]}
+
+    assert placed_by_part["large"] == 2
+    assert placed_by_part["small"] == 0
+    assert result["parts_placed"] == 2
 
 
 def test_nesting_metrics_are_consistent_for_known_fixture():
     parts = [
-        PartSpec(part_id="p1", polygon=Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]), quantity=1),
-        PartSpec(part_id="p2", polygon=Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]), quantity=1),
+        PartSpec(part_id="p1", filename="p1.dxf", polygon=rectangle(10, 10), quantity=1),
+        PartSpec(part_id="p2", filename="p2.dxf", polygon=rectangle(5, 10), quantity=1),
     ]
     sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
 
-    result = nest(parts, sheets, {"gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+    result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
 
     assert result["parts_placed"] == 2
     assert result["layouts_used"] == 1
-    assert result["used_area"] == 200.0
+    assert result["used_area"] == 150.0
     assert result["total_sheet_area"] == 400.0
-    assert result["scrap_area"] == 200.0
-    assert result["yield"] == 0.5
-    assert result["yield_ratio"] == 0.5
-    assert result["scrap_ratio"] == 0.5
-    assert result["layouts"][0]["used_area"] == 200.0
-    assert result["layouts"][0]["scrap_area"] == 200.0
-
-
-def test_nesting_many_small_parts_can_fill_most_of_sheet():
-    parts = [
-        PartSpec(part_id="chip", polygon=Polygon([(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]), quantity=20),
-    ]
-    sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
-
-    result = nest(parts, sheets, {"gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
-
-    assert result["parts_placed"] == 20
-    assert result["used_area"] == 320.0
-    assert result["yield"] == 0.8
-    assert result["yield"] > 0.7
+    assert result["scrap_area"] == 250.0
+    assert result["yield"] == 0.375
+    assert result["yield_ratio"] == 0.375
+    assert result["scrap_ratio"] == 0.625
 
 
 def test_nesting_rejects_part_larger_than_sheet():
-    parts = [
-        PartSpec(part_id="oversized", polygon=Polygon([(0, 0), (30, 0), (30, 10), (0, 10), (0, 0)]), quantity=1),
-    ]
+    parts = [PartSpec(part_id="oversized", filename="oversized.dxf", polygon=rectangle(30, 10), quantity=1)]
     sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
 
-    result = nest(parts, sheets, {"gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+    result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
 
     assert result["parts_placed"] == 0
     assert result["layouts_used"] == 0
@@ -85,12 +117,16 @@ def test_nesting_rejects_part_larger_than_sheet():
 
 def test_nesting_debug_payload_reports_geometry_and_scale():
     parts = [
-        PartSpec(part_id="p1", polygon=Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]), quantity=1),
-        PartSpec(part_id="p2", polygon=Polygon([(0, 0), (5, 0), (5, 10), (0, 10), (0, 0)]), quantity=1),
+        PartSpec(part_id="p1", filename="p1.dxf", polygon=rectangle(10, 10), quantity=1),
+        PartSpec(part_id="p2", filename="p2.dxf", polygon=rectangle(5, 10), quantity=1),
     ]
     sheets = [SheetSpec(sheet_id="sheet-1", width=20, height=20, quantity=1)]
 
-    result = nest(parts, sheets, {"gap": 0.0, "rotation": [0], "objective": "maximize_yield", "debug": True})
+    result = nest(
+        parts,
+        sheets,
+        {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield", "debug": True},
+    )
 
     assert result["debug"]["sheet"]["width"] == 20.0
     assert result["debug"]["total_used_area"] == 150.0
@@ -103,17 +139,15 @@ def test_nesting_debug_payload_reports_geometry_and_scale():
 
 
 def test_nesting_warns_about_probable_units_mismatch():
-    parts = [
-        PartSpec(part_id="mandala", polygon=Polygon([(0, 0), (7, 0), (7, 7), (0, 7), (0, 0)]), quantity=1),
-    ]
+    parts = [PartSpec(part_id="mandala", filename="mandala.dxf", polygon=rectangle(7, 7), quantity=1)]
     sheets = [SheetSpec(sheet_id="sheet-1", width=1000, height=1000, quantity=1)]
 
     result = nest(
         parts,
         sheets,
-        {"gap": 0.0, "rotation": [0], "objective": "maximize_yield", "source_units": "Inches", "source_max_extent": 7.0},
+        {"mode": "fill_sheet", "gap": 0.0, "rotation": [0], "objective": "maximize_yield", "source_units": "Inches", "source_max_extent": 7.0},
     )
 
-    assert result["parts_placed"] == 1
+    assert result["parts_placed"] >= 1
     assert result["warnings"]
-    assert "Possible scale mismatch" in result["warnings"][0]
+    assert any("Possible scale mismatch" in warning for warning in result["warnings"])

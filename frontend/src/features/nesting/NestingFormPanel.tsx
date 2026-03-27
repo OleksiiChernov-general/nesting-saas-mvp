@@ -3,6 +3,7 @@ import { Panel } from "../../components/Panel";
 import { StatusMessage } from "../../components/StatusMessage";
 
 export type NestingFormState = {
+  nestingMode: "fill_sheet" | "batch_quantity";
   sheetWidth: string;
   sheetHeight: string;
   sheetQuantity: string;
@@ -40,7 +41,46 @@ export function NestingFormPanel({
   onSubmit,
 }: NestingFormPanelProps) {
   return (
-    <Panel title="Nesting Job" subtitle="Define the sheet stock and optimization target.">
+    <Panel title="Nesting Job" subtitle="Choose the nesting mode, sheet stock, and optimization target.">
+      <Field label="Nesting Mode">
+        <div className="flex gap-3">
+          <button
+            className={`flex-1 rounded-2xl border-2 px-4 py-3 text-sm font-semibold transition ${
+              form.nestingMode === "fill_sheet"
+                ? "border-accent bg-accent text-white"
+                : "border-slate-300 bg-white text-slate-900 hover:border-accent"
+            }`}
+            onClick={() => onChange("nestingMode", "fill_sheet")}
+            type="button"
+          >
+            Fill Sheet
+          </button>
+          <button
+            className={`flex-1 rounded-2xl border-2 px-4 py-3 text-sm font-semibold transition ${
+              form.nestingMode === "batch_quantity"
+                ? "border-accent bg-accent text-white"
+                : "border-slate-300 bg-white text-slate-900 hover:border-accent"
+            }`}
+            onClick={() => onChange("nestingMode", "batch_quantity")}
+            type="button"
+          >
+            Batch Quantity
+          </button>
+        </div>
+      </Field>
+
+      <div className="rounded-2xl bg-slate-50 px-4 py-3 text-xs text-slate-600">
+        {form.nestingMode === "fill_sheet" ? (
+          <div>
+            <strong>Fill Sheet Mode:</strong> The algorithm will place as many parts as possible on each sheet to maximize yield.
+          </div>
+        ) : (
+          <div>
+            <strong>Batch Quantity Mode:</strong> The algorithm will place the exact quantities you specify for each part.
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <Field error={errors.sheetWidth} label="Sheet width">
           <input className={inputClassName} min="0" onChange={(event) => onChange("sheetWidth", event.target.value)} type="number" value={form.sheetWidth} />
@@ -61,8 +101,8 @@ export function NestingFormPanel({
           onChange={(event) => onChange("objective", event.target.value as NestingFormState["objective"])}
           value={form.objective}
         >
-          <option value="MAX_YIELD">MAX_YIELD</option>
-          <option value="MIN_SHEETS">MIN_SHEETS</option>
+          <option value="MAX_YIELD">Maximize Yield</option>
+          <option value="MIN_SHEETS">Minimize Sheets</option>
         </select>
       </Field>
       <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">

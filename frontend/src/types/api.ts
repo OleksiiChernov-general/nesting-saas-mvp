@@ -77,6 +77,7 @@ export type SheetInput = {
 };
 
 export type NestingJobCreateRequest = {
+  mode?: "fill_sheet" | "batch_quantity";
   parts: PartInput[];
   sheets: SheetInput[];
   params: {

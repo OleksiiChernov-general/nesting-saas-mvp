@@ -85,8 +85,11 @@ class CleanGeometryResponse(BaseModel):
 
 class PartInput(BaseModel):
     part_id: str
+    filename: str | None = None
     polygon: PolygonPayload
     quantity: int = Field(default=1, ge=1)
+    enabled: bool = True
+    fill_only: bool = False
 
 
 class SheetInput(BaseModel):
@@ -106,9 +109,20 @@ class NestingParams(BaseModel):
 
 
 class NestingJobCreateRequest(BaseModel):
+    mode: Literal["fill_sheet", "batch_quantity"] = "batch_quantity"
     parts: list[PartInput]
     sheets: list[SheetInput]
     params: NestingParams = Field(default_factory=NestingParams)
+
+
+class PartSummaryResponse(BaseModel):
+    part_id: str
+    filename: str | None = None
+    requested_quantity: int | None = None
+    placed_quantity: int
+    remaining_quantity: int | None = None
+    enabled: bool = True
+    area_contribution: float
 
 
 class JobResponse(BaseModel):
@@ -194,6 +208,7 @@ class NestingDebugResponse(BaseModel):
 
 
 class NestingResultResponse(BaseModel):
+    mode: Literal["fill_sheet", "batch_quantity"] = "batch_quantity"
     yield_value: float = Field(alias="yield")
     yield_ratio: float | None = None
     scrap_ratio: float | None = None
@@ -203,6 +218,7 @@ class NestingResultResponse(BaseModel):
     parts_placed: int | None = None
     layouts_used: int | None = None
     layouts: list[SheetLayoutResponse]
+    part_summaries: list[PartSummaryResponse] = Field(default_factory=list)
     unplaced_parts: list[str]
     warnings: list[str] = Field(default_factory=list)
     debug: NestingDebugResponse | None = None

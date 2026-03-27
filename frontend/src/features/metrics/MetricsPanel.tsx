@@ -41,13 +41,54 @@ export function MetricsPanel({ result }: MetricsPanelProps) {
           </div>
         ))}
       </div>
-      {result?.unplaced_parts.length ? (
-        <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
-          Unplaced parts: {result.unplaced_parts.join(", ")}
+
+      {result?.part_summaries && result.part_summaries.length > 0 ? (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+          <div className="text-sm font-semibold text-slate-900 mb-3">Per-Part Results</div>
+          <div className="space-y-3">
+            {result.part_summaries.map((part) => (
+              <div key={part.part_id} className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{part.filename || part.part_id}</div>
+                    <div className="text-xs text-slate-500">ID: {part.part_id}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-slate-900">{part.placed_quantity}</div>
+                    <div className="text-xs text-slate-500">placed</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  {part.requested_quantity !== null ? (
+                    <div className="text-slate-600">
+                      Requested: <span className="font-semibold">{part.requested_quantity}</span>
+                    </div>
+                  ) : null}
+                  {part.remaining_quantity !== null ? (
+                    <div className={part.remaining_quantity > 0 ? "text-amber-600" : "text-emerald-600"}>
+                      Remaining: <span className="font-semibold">{part.remaining_quantity}</span>
+                    </div>
+                  ) : null}
+                  <div className="text-slate-600">
+                    Area: <span className="font-semibold">{formatNumber(part.area_contribution)}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
+
+      {result?.unplaced_parts.length ? (
+        <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          <div className="font-semibold mb-1">Unplaced parts:</div>
+          {result.unplaced_parts.join(", ")}
+        </div>
+      ) : null}
+
       {result?.warnings?.length ? (
         <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          <div className="font-semibold mb-1">Warnings:</div>
           {result.warnings.join(" ")}
         </div>
       ) : null}

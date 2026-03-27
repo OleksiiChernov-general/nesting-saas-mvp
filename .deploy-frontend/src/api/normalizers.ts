@@ -1,0 +1,143 @@
+import type {
+  CleanGeometryResponse,
+  HealthResponse,
+  ImportResponse,
+  InvalidShape,
+  JobResponse,
+  NestingResultResponse,
+  PlacementResponse,
+  Point,
+  PolygonPayload,
+  SheetLayoutResponse,
+} from "../types/api";
+
+function toNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function toStringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function normalizePoint(value: unknown): Point | null {
+  if (!value || typeof value !== "object") return null;
+  const point = value as Record<string, unknown>;
+  const x = toNumber(point.x, Number.NaN);
+  const y = toNumber(point.y, Number.NaN);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+export function normalizePolygon(value: unknown): PolygonPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const points = Array.isArray(record.points) ? record.points.map(normalizePoint).filter((item): item is Point => item !== null) : [];
+  if (points.length < 3) return null;
+  const first = points[0];
+  const last = points[points.length - 1];
+  const closed = first.x === last.x && first.y === last.y ? points : [...points, first];
+  return closed.length >= 4 ? { points: closed } : null;
+}
+
+function normalizeInvalidShapes(value: unknown): InvalidShape[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item, index) => {
+    const record = item as Record<string, unknown>;
+    return {
+      source: toStringValue(record?.source, `shape-${index + 1}`),
+      reason: toStringValue(record?.reason, "Invalid geometry"),
+    };
+  });
+}
+
+export function normalizeHealthResponse(value: unknown): HealthResponse {
+  const record = value as Record<string, unknown> | null;
+  return { status: toStringValue(record?.status, "unavailable") };
+}
+
+export function normalizeImportResponse(value: unknown, fallbackFilename: string): ImportResponse {
+  const record = value as Record<string, unknown> | null;
+  return {
+    import_id: toStringValue(record?.import_id),
+    filename: toStringValue(record?.filename, fallbackFilename),
+    polygons: Array.isArray(record?.polygons)
+      ? record.polygons.map(normalizePolygon).filter((item): item is PolygonPayload => item !== null)
+      : [],
+    invalid_shapes: normalizeInvalidShapes(record?.invalid_shapes),
+  };
+}
+
+export function normalizeCleanupResponse(value: unknown): CleanGeometryResponse {
+  const record = value as Record<string, unknown> | null;
+  return {
+    polygons: Array.isArray(record?.polygons)
+      ? record.polygons.map(normalizePolygon).filter((item): item is PolygonPayload => item !== null)
+      : [],
+    removed: toNumber(record?.removed),
+    invalid_shapes: normalizeInvalidShapes(record?.invalid_shapes),
+  };
+}
+
+export function normalizeJobResponse(value: unknown): JobResponse {
+  const record = value as Record<string, unknown> | null;
+  const state = toStringValue(record?.state, "FAILED");
+  return {
+    id: toStringValue(record?.id),
+    state: ["CREATED", "RUNNING", "SUCCEEDED", "FAILED"].includes(state)
+      ? (state as JobResponse["state"])
+      : "FAILED",
+    error: typeof record?.error === "string" ? record.error : null,
+  };
+}
+
+function normalizePlacement(value: unknown, index: number): PlacementResponse | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const polygon = normalizePolygon(record.polygon);
+  if (!polygon) return null;
+  return {
+    part_id: toStringValue(record.part_id, `part-${index + 1}`),
+    sheet_id: toStringValue(record.sheet_id, "sheet"),
+    instance: toNumber(record.instance, 1),
+    rotation: toNumber(record.rotation, 0),
+    x: toNumber(record.x),
+    y: toNumber(record.y),
+    width: toNumber(record.width),
+    height: toNumber(record.height),
+    polygon,
+  };
+}
+
+function normalizeLayout(value: unknown, index: number): SheetLayoutResponse | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const placements = Array.isArray(record.placements)
+    ? record.placements.map((item, placementIndex) => normalizePlacement(item, placementIndex)).filter((item): item is PlacementResponse => item !== null)
+    : [];
+  return {
+    sheet_id: toStringValue(record.sheet_id, `sheet-${index + 1}`),
+    instance: toNumber(record.instance, index + 1),
+    width: toNumber(record.width, 1),
+    height: toNumber(record.height, 1),
+    placements,
+    used_area: toNumber(record.used_area),
+    scrap_area: toNumber(record.scrap_area),
+  };
+}
+
+export function normalizeResultResponse(value: unknown): NestingResultResponse {
+  const record = value as Record<string, unknown> | null;
+  const yieldValue = typeof record?.yield === "number" ? record.yield : toNumber(record?.yield_value);
+  return {
+    yield: yieldValue,
+    yield_value: yieldValue,
+    scrap_area: toNumber(record?.scrap_area),
+    used_area: toNumber(record?.used_area),
+    total_sheet_area: toNumber(record?.total_sheet_area),
+    layouts: Array.isArray(record?.layouts)
+      ? record.layouts.map((item, index) => normalizeLayout(item, index)).filter((item): item is SheetLayoutResponse => item !== null)
+      : [],
+    unplaced_parts: Array.isArray(record?.unplaced_parts)
+      ? record.unplaced_parts.map((item, index) => toStringValue(item, `part-${index + 1}`))
+      : [],
+  };
+}
