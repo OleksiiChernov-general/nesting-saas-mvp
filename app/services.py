@@ -92,14 +92,55 @@ def mark_job_queued(db: Session, job: NestingJob) -> NestingJob:
     return job
 
 
+def _build_job_progress_parts(job: NestingJob) -> tuple[str | None, dict | None, list[dict]]:
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    mode = payload.get("mode") if payload.get("mode") in {"fill_sheet", "batch_quantity"} else None
+    payload_parts = payload.get("parts") if isinstance(payload.get("parts"), list) else []
+    enabled_parts = [part for part in payload_parts if isinstance(part, dict) and part.get("enabled", True) is not False]
+
+    if job.result_path:
+        try:
+            result = load_job_result(Path(job.result_path))
+            if isinstance(result, dict):
+                result_mode = result.get("mode")
+                result_summary = result.get("summary")
+                result_parts = result.get("parts")
+                if result_mode in {"fill_sheet", "batch_quantity"} and isinstance(result_summary, dict) and isinstance(result_parts, list):
+                    return result_mode, result_summary, result_parts
+        except FileNotFoundError:
+            pass
+
+    progress_parts: list[dict] = []
+    for index, part in enumerate(enabled_parts):
+        quantity = part.get("quantity")
+        requested_quantity = quantity if isinstance(quantity, int) and quantity >= 1 else 1
+        progress_parts.append(
+            {
+                "part_id": str(part.get("part_id") or f"part-{index + 1}"),
+                "filename": str(part.get("filename")) if part.get("filename") is not None else None,
+                "requested_quantity": requested_quantity,
+                "placed_quantity": 0,
+                "remaining_quantity": requested_quantity,
+                "enabled": True,
+                "area_contribution": 0.0,
+            }
+        )
+
+    return mode, {"total_parts": len(enabled_parts)}, progress_parts
+
+
 def serialize_job(job: NestingJob) -> dict:
     artifact_url = f"/v1/nesting/jobs/{job.id}/artifact" if job.artifact_path else None
+    mode, summary, parts = _build_job_progress_parts(job)
     return {
         "id": job.id,
         "state": job.state,
         "progress": float(job.progress or 0.0),
         "status_message": job.status_message,
         "error": job.error,
+        "mode": mode,
+        "summary": summary,
+        "parts": parts,
         "artifact_url": artifact_url,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "queued_at": job.queued_at.isoformat() if job.queued_at else None,
@@ -200,7 +241,7 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
             PartSpec(
                 part_id=part.part_id,
                 polygon=polygon_from_points([(point.x, point.y) for point in part.polygon.points]),
-                quantity=part.quantity,
+                quantity=part.quantity or 1,
                 filename=part.filename,
                 enabled=part.enabled,
                 fill_only=part.fill_only,

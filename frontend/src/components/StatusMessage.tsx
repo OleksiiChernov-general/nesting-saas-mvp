@@ -4,10 +4,10 @@ type StatusMessageProps = {
 };
 
 const toneClassName: Record<NonNullable<StatusMessageProps["tone"]>, string> = {
-  neutral: "bg-slate-100 text-slate-700",
-  success: "bg-emerald-50 text-emerald-700",
-  warning: "bg-amber-50 text-amber-700",
-  error: "bg-rose-50 text-rose-700",
+  neutral: "border border-[color:var(--border)] bg-black/15 text-slate-300",
+  success: "border border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
+  warning: "border border-amber-400/30 bg-amber-500/10 text-amber-200",
+  error: "border border-rose-400/30 bg-rose-500/10 text-rose-200",
 };
 
 export function StatusMessage({ tone = "neutral", message }: StatusMessageProps) {

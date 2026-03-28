@@ -72,6 +72,6 @@ def sample_job_payload():
                 },
             }
         ],
-        "sheets": [{"sheet_id": "sheet-1", "width": 100, "height": 100, "quantity": 1}],
+        "sheet": {"sheet_id": "sheet-1", "width": 100, "height": 100, "quantity": 1, "units": "mm"},
         "params": {"gap": 2.0, "rotation": [0, 180], "objective": "maximize_yield"},
     }

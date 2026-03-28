@@ -27,7 +27,8 @@ def test_fill_sheet():
     print(f"Used area: {result['used_area']}")
     print(f"Yield: {result['yield']}")
     print(f"Warnings: {result['warnings']}")
-    print(f"Part summaries: {result['part_summaries']}")
+    print(f"Summary: {result['summary']}")
+    print(f"Parts: {result['parts']}")
     
     assert result["parts_placed"] == 4, f"Expected 4 parts, got {result['parts_placed']}"
     print("✓ Test passed!")

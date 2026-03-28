@@ -87,10 +87,10 @@ export function LayoutViewer({
             total={safeLayouts.length}
           />
           <div className="flex items-center gap-2">
-            <button className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700" onClick={() => setZoom((value) => Math.min(value * 1.2, 6))} type="button">+</button>
-            <button className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700" onClick={() => setZoom((value) => Math.max(value / 1.2, 0.5))} type="button">-</button>
+            <button className="rounded-full border border-[color:var(--border)] bg-white/[0.03] px-3 py-1 text-sm text-slate-200 transition hover:border-accent hover:text-white" onClick={() => setZoom((value) => Math.min(value * 1.2, 6))} type="button">+</button>
+            <button className="rounded-full border border-[color:var(--border)] bg-white/[0.03] px-3 py-1 text-sm text-slate-200 transition hover:border-accent hover:text-white" onClick={() => setZoom((value) => Math.max(value / 1.2, 0.5))} type="button">-</button>
             <button
-              className="rounded-full border border-slate-300 px-3 py-1 text-sm text-slate-700"
+              className="rounded-full border border-[color:var(--border)] bg-white/[0.03] px-3 py-1 text-sm text-slate-200 transition hover:border-accent hover:text-white"
               onClick={() => {
                 setZoom(1);
                 setPan({ x: 0, y: 0 });
@@ -103,9 +103,9 @@ export function LayoutViewer({
         </div>
       }
     >
-      <div className="rounded-[1.5rem] border border-slate-200 bg-[linear-gradient(135deg,#f8fafc_0%,#eef2f7_100%)] p-4">
+      <div className="rounded-[1.75rem] border border-[color:var(--border)] bg-[linear-gradient(145deg,rgba(17,24,39,0.94)_0%,rgba(10,12,16,0.96)_100%)] p-4">
         <svg
-          className="h-[540px] w-full cursor-grab rounded-[1.25rem] bg-slate-50"
+          className="h-[540px] w-full cursor-grab rounded-[1.25rem] bg-[#0b1220]"
           onMouseDown={(event) => setDragStart({ x: event.clientX, y: event.clientY })}
           onMouseLeave={() => setDragStart(null)}
           onMouseMove={(event) => {
@@ -122,16 +122,16 @@ export function LayoutViewer({
         >
           <defs>
             <pattern height="12" id="grid" patternUnits="userSpaceOnUse" width="12">
-              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#d9e1e8" strokeWidth="0.5" />
+              <path d="M 12 0 L 0 0 0 12" fill="none" stroke="#1f2937" strokeWidth="0.5" />
             </pattern>
           </defs>
           <rect fill="url(#grid)" height="100%" width="100%" x="-10000" y="-10000" />
           <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
             {canShowResult && activeLayout ? (
               <>
-                <rect fill="#ffffff" height={activeLayout.height} rx={2} stroke="#1e293b" strokeWidth="1.5" width={activeLayout.width} x={0} y={0} />
+                <rect fill="#111827" height={activeLayout.height} rx={2} stroke="#374151" strokeWidth="1.5" width={activeLayout.width} x={0} y={0} />
                 {activeLayout.placements.length === 0 ? (
-                  <text fill="#64748b" fontSize="5" x={activeLayout.width / 2 - 18} y={activeLayout.height / 2}>
+                  <text fill="#9ca3af" fontSize="5" x={activeLayout.width / 2 - 18} y={activeLayout.height / 2}>
                     No parts placed on this sheet.
                   </text>
                 ) : null}
@@ -169,12 +169,12 @@ export function LayoutViewer({
                   return (
                     <text
                       fill="#0f172a"
-                      fontFamily="IBM Plex Mono, monospace"
-                      fontSize="5"
-                      key={`${label}-${placement.instance}-${index}-label`}
-                      x={placement.x + placement.width / 2}
-                      y={flipYAxis - (placement.y + placement.height / 2)}
-                    >
+                    fontFamily="IBM Plex Mono, monospace"
+                    fontSize="5"
+                    key={`${label}-${placement.instance}-${index}-label`}
+                    x={placement.x + placement.width / 2}
+                    y={flipYAxis - (placement.y + placement.height / 2)}
+                  >
                       {label}
                     </text>
                   );
@@ -193,7 +193,7 @@ export function LayoutViewer({
                 ))}
               </g>
             ) : (
-              <text fill="#64748b" fontSize="8" x="10" y="20">
+              <text fill="#9ca3af" fontSize="8" x="10" y="20">
                 Upload and process a DXF to see geometry here.
               </text>
             )}
@@ -201,7 +201,7 @@ export function LayoutViewer({
         </svg>
       </div>
       {debug?.warnings.length ? (
-        <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           {debug.warnings.join(" ")}
         </div>
       ) : null}

@@ -18,7 +18,7 @@ export function CleanupPanel({ importResult, cleanupResult, loading, error, stat
   return (
     <Panel title="Geometry Cleanup" subtitle="Repair and validate geometry before nesting.">
       <button
-        className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
+        className="w-full rounded-2xl border border-[color:var(--border)] bg-white/[0.03] px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-accent hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500"
         disabled={!importResult || importResult.polygons.length === 0 || loading}
         onClick={onClean}
         type="button"
@@ -26,17 +26,17 @@ export function CleanupPanel({ importResult, cleanupResult, loading, error, stat
         {loading ? "Cleaning..." : "Clean Geometry"}
       </button>
       <div className="grid grid-cols-2 gap-3 text-sm">
-        <div className="rounded-2xl bg-slate-100 px-4 py-3">
+        <div className="rounded-2xl border border-[color:var(--border)] bg-black/15 px-4 py-3">
           <div className="text-slate-500">Valid polygons</div>
-          <div className="mt-1 font-semibold text-slate-900">{validPolygonCount}</div>
+          <div className="mt-1 font-semibold text-slate-100">{validPolygonCount}</div>
         </div>
-        <div className="rounded-2xl bg-slate-100 px-4 py-3">
+        <div className="rounded-2xl border border-[color:var(--border)] bg-black/15 px-4 py-3">
           <div className="text-slate-500">Invalid shapes</div>
-          <div className="mt-1 font-semibold text-slate-900">{invalidShapeCount}</div>
+          <div className="mt-1 font-semibold text-slate-100">{invalidShapeCount}</div>
         </div>
       </div>
       {cleanupResult ? (
-        <div className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <div className="rounded-2xl border border-[color:var(--border)] bg-white/[0.03] px-4 py-3 text-sm text-slate-300">
           Removed during cleanup: {cleanupResult.removed}
           {cleanupResult.invalid_shapes.length > 0 ? `, warnings: ${cleanupResult.invalid_shapes.length}` : ", warnings: 0"}
         </div>

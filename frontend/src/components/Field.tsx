@@ -9,9 +9,9 @@ type FieldProps = {
 export function Field({ label, error, children }: FieldProps) {
   return (
     <label className="block space-y-2">
-      <span className="text-sm font-medium text-slate-700">{label}</span>
+      <span className="text-sm font-medium text-slate-300">{label}</span>
       {children}
-      {error ? <span className="block text-xs text-rose-600">{error}</span> : null}
+      {error ? <span className="block text-xs text-rose-300">{error}</span> : null}
     </label>
   );
 }

@@ -200,47 +200,171 @@ def _candidate_parts(parts: list[PartSpec], mode: NestingMode, remaining: dict[s
     return sorted(candidates, key=lambda item: (-round(item.polygon.area, 6), item.filename or item.part_id, item.part_id))
 
 
-def _find_placement(
+def _is_nestable_part(part: PartSpec) -> bool:
+    polygon = part.polygon
+    return bool(
+        polygon
+        and not polygon.is_empty
+        and polygon.is_valid
+        and polygon.area > EPSILON
+        and getattr(polygon, "exterior", None) is not None
+    )
+
+
+def _candidate_axis_positions(
+    placed_polygons: list[Polygon],
+    limit: float,
+    size: float,
+    gap: float,
+    axis: Literal["x", "y"],
+) -> list[float]:
+    if size > limit + EPSILON:
+        return []
+
+    max_anchor = max(limit - size, 0.0)
+    positions = {0.0, round(max_anchor, 6)}
+
+    for polygon in placed_polygons:
+        min_x, min_y, max_x, max_y = polygon.bounds
+        axis_min, axis_max = (min_x, max_x) if axis == "x" else (min_y, max_y)
+        raw_positions = {
+            axis_min,
+            axis_max + gap,
+            axis_min - size - gap,
+            axis_max - size,
+            axis_min - size,
+        }
+        for raw in raw_positions:
+            if raw < -EPSILON or raw > max_anchor + EPSILON:
+                continue
+            positions.add(round(min(max(raw, 0.0), max_anchor), 6))
+
+    grid_step = max(size * 0.5, 0.5)
+    cursor = 0.0
+    while cursor <= max_anchor + EPSILON:
+        positions.add(round(min(cursor, max_anchor), 6))
+        cursor += grid_step
+
+    return sorted(positions)
+
+
+def _contact_score(candidate: Polygon, placed_polygons: list[Polygon], sheet: SheetSpec, gap: float) -> int:
+    min_x, min_y, max_x, max_y = candidate.bounds
+    score = 0
+    if min_x <= EPSILON:
+        score += 1
+    if min_y <= EPSILON:
+        score += 1
+    if abs(sheet.width - max_x) <= EPSILON:
+        score += 1
+    if abs(sheet.height - max_y) <= EPSILON:
+        score += 1
+
+    proximity_limit = max(gap + EPSILON, EPSILON)
+    for polygon in placed_polygons:
+        if candidate.distance(polygon) <= proximity_limit:
+            score += 1
+    return score
+
+
+def _placement_score(
+    *,
+    part: PartSpec,
+    candidate: Polygon,
+    parts: list[PartSpec],
+    placed_polygons: list[Polygon],
+    sheet: SheetSpec,
+    gap: float,
+    rotations: list[int],
+    mode: NestingMode,
+    remaining: dict[str, int],
+) -> tuple[float, float, int, float, float, float]:
+    min_x, min_y, max_x, max_y = candidate.bounds
+    contact_score = _contact_score(candidate, placed_polygons, sheet, gap)
+    backlog_area = float(max(remaining.get(part.part_id, 0), 1)) * float(part.polygon.area)
+    primary_score = backlog_area if mode == "batch_quantity" else float(part.polygon.area)
+    future_remaining = dict(remaining)
+    if mode == "batch_quantity":
+        future_remaining[part.part_id] = max(future_remaining.get(part.part_id, 0) - 1, 0)
+    future_score = _future_productive_area(
+        parts=parts,
+        sheet=sheet,
+        placed_polygons=placed_polygons + [candidate],
+        rotations=rotations,
+        gap=gap,
+        mode=mode,
+        remaining=future_remaining,
+    )
+    return (
+        primary_score + (future_score * 0.35),
+        future_score,
+        contact_score,
+        -float(max_y),
+        -float(max_x),
+        -(float(min_y) + float(min_x)),
+    )
+
+
+def _future_productive_area(
+    *,
+    parts: list[PartSpec],
+    sheet: SheetSpec,
+    placed_polygons: list[Polygon],
+    rotations: list[int],
+    gap: float,
+    mode: NestingMode,
+    remaining: dict[str, int],
+) -> float:
+    best_area = 0.0
+    for part in _candidate_parts(parts, mode, remaining):
+        part_area = float(part.polygon.area)
+        for rotation in rotations:
+            oriented = _oriented_polygon(part.polygon, rotation)
+            part_width = oriented.bounds[2]
+            part_height = oriented.bounds[3]
+            x_candidates = _candidate_axis_positions(placed_polygons, sheet.width, part_width, gap, "x")
+            y_candidates = _candidate_axis_positions(placed_polygons, sheet.height, part_height, gap, "y")
+
+            fits = False
+            for y in y_candidates:
+                if y + part_height > sheet.height + EPSILON:
+                    continue
+                for x in x_candidates:
+                    if x + part_width > sheet.width + EPSILON:
+                        continue
+                    candidate = affinity.translate(oriented, xoff=x, yoff=y)
+                    if _fits(candidate, placed_polygons, sheet, gap):
+                        fits = True
+                        break
+                if fits:
+                    break
+            if fits:
+                best_area = max(best_area, part_area)
+                break
+    return best_area
+
+
+def _best_placement_for_part(
+    *,
+    parts: list[PartSpec],
     part: PartSpec,
     sheet: SheetSpec,
-    instance: int,
     placed_polygons: list[Polygon],
     placed_count: int,
     rotations: list[int],
     gap: float,
-) -> Placement | None:
+    mode: NestingMode,
+    remaining: dict[str, int],
+) -> tuple[Placement, tuple[float, float, int, float, float, float]] | None:
+    best_match: tuple[Placement, tuple[float, float, int, float, float, float]] | None = None
+
     for rotation in rotations:
         oriented = _oriented_polygon(part.polygon, rotation)
         part_width = oriented.bounds[2]
         part_height = oriented.bounds[3]
-        
-        # Build candidates from edge positions
-        x_edge_candidates = sorted({0.0, *[round(item.bounds[2] + gap, 6) for item in placed_polygons]})
-        y_edge_candidates = sorted({0.0, *[round(item.bounds[3] + gap, 6) for item in placed_polygons]})
-        
-        # For fill_sheet mode, add grid sampling to explore the sheet more thoroughly
-        # This helps find empty spaces that edge-based candidates don't cover
-        x_candidates_list = list(x_edge_candidates)
-        y_candidates_list = list(y_edge_candidates)
-        
-        # Add more granular grid points if sheet has significant empty space
-        if not placed_polygons or (sheet.width * sheet.height > sum(p.area for p in placed_polygons) * 3):
-            grid_step_x = max(part_width * 0.75, 0.5)
-            grid_step_y = max(part_height * 0.75, 0.5)
-            
-            x_pos = grid_step_x
-            while x_pos < sheet.width:
-                x_candidates_list.append(round(x_pos, 6))
-                x_pos += grid_step_x
-            
-            y_pos = grid_step_y
-            while y_pos < sheet.height:
-                y_candidates_list.append(round(y_pos, 6))
-                y_pos += grid_step_y
-        
-        x_candidates = sorted(set(x_candidates_list))
-        y_candidates = sorted(set(y_candidates_list))
-        
+        x_candidates = _candidate_axis_positions(placed_polygons, sheet.width, part_width, gap, "x")
+        y_candidates = _candidate_axis_positions(placed_polygons, sheet.height, part_height, gap, "y")
+
         for y in y_candidates:
             if y + part_height > sheet.height + EPSILON:
                 continue
@@ -250,7 +374,8 @@ def _find_placement(
                 candidate = affinity.translate(oriented, xoff=x, yoff=y)
                 if not _fits(candidate, placed_polygons, sheet, gap):
                     continue
-                return Placement(
+
+                placement = Placement(
                     part_id=part.part_id,
                     sheet_id=sheet.sheet_id,
                     instance=placed_count + 1,
@@ -259,7 +384,77 @@ def _find_placement(
                     y=y,
                     polygon=candidate,
                 )
-    return None
+                score = _placement_score(
+                    part=part,
+                    candidate=candidate,
+                    parts=parts,
+                    placed_polygons=placed_polygons,
+                    sheet=sheet,
+                    gap=gap,
+                    rotations=rotations,
+                    mode=mode,
+                    remaining=remaining,
+                )
+                if best_match is None or score > best_match[1]:
+                    best_match = (placement, score)
+
+    return best_match
+
+
+def _select_next_placement(
+    *,
+    parts: list[PartSpec],
+    sheet: SheetSpec,
+    placed_polygons: list[Polygon],
+    placed_counts: dict[str, int],
+    rotations: list[int],
+    gap: float,
+    mode: NestingMode,
+    remaining: dict[str, int],
+) -> Placement | None:
+    best_choice: tuple[Placement, tuple[float, float, int, float, float, float], tuple[float, float, str]] | None = None
+
+    for part in _candidate_parts(parts, mode, remaining):
+        match = _best_placement_for_part(
+            parts=parts,
+            part=part,
+            sheet=sheet,
+            placed_polygons=placed_polygons,
+            placed_count=placed_counts[part.part_id],
+            rotations=rotations,
+            gap=gap,
+            mode=mode,
+            remaining=remaining,
+        )
+        if match is None:
+            continue
+
+        placement, score = match
+        tie_break = (float(part.polygon.area), float(remaining.get(part.part_id, 0)), part.part_id)
+        if best_choice is None or score > best_choice[1] or (score == best_choice[1] and tie_break > best_choice[2]):
+            best_choice = (placement, score, tie_break)
+
+    return best_choice[0] if best_choice else None
+
+
+def _part_can_fit_empty_sheet(part: PartSpec, sheets: list[SheetSpec], rotations: list[int], gap: float) -> bool:
+    if not _is_nestable_part(part):
+        return False
+    for sheet in sheets:
+        match = _best_placement_for_part(
+            parts=[part],
+            part=part,
+            sheet=sheet,
+            placed_polygons=[],
+            placed_count=0,
+            rotations=rotations,
+            gap=gap,
+            mode="batch_quantity",
+            remaining={part.part_id: 1},
+        )
+        if match is not None:
+            return True
+    return False
 
 
 def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
@@ -268,19 +463,20 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         raise ValueError("Unsupported nesting mode")
 
     gap = float(params.get("gap", 0.0))
-    rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 180}] or [0]
+    rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 90, 180, 270}] or [0]
     debug_enabled = bool(params.get("debug", False))
     source_units = params.get("source_units")
     source_max_extent = float(params["source_max_extent"]) if params.get("source_max_extent") else None
 
-    active_parts = [part for part in parts if part.enabled]
-    if not active_parts:
+    enabled_parts = [part for part in parts if part.enabled]
+    if not enabled_parts:
         raise ValueError("At least one enabled part is required")
+    active_parts = [part for part in enabled_parts if _is_nestable_part(part)]
 
-    remaining: dict[str, int] = {part.part_id: part.quantity for part in active_parts}
-    part_lookup = {part.part_id: part for part in active_parts}
-    placed_counts = {part.part_id: 0 for part in active_parts}
-    area_contribution = {part.part_id: 0.0 for part in active_parts}
+    remaining: dict[str, int] = {part.part_id: max(part.quantity, 1) for part in enabled_parts}
+    placed_counts = {part.part_id: 0 for part in enabled_parts}
+    area_contribution = {part.part_id: 0.0 for part in enabled_parts}
+    fit_on_empty_sheet = {part.part_id: _part_can_fit_empty_sheet(part, sheets, rotations, gap) for part in enabled_parts}
 
     layout_map: dict[tuple[str, int], list[Placement]] = {}
     geometry_map: dict[tuple[str, int], list[Polygon]] = {}
@@ -289,31 +485,26 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     for sheet, instance in _sheet_instances(sheets):
         placed_polygons = geometry_map.setdefault((sheet.sheet_id, instance), [])
         while not stop_filling:
-            placed_any = False
-            for part in _candidate_parts(active_parts, mode, remaining):
-                placement = _find_placement(
-                    part,
-                    sheet,
-                    instance,
-                    placed_polygons,
-                    placed_counts[part.part_id],
-                    rotations,
-                    gap,
-                )
-                if not placement:
-                    continue
-                layout_map.setdefault((sheet.sheet_id, instance), []).append(placement)
-                placed_polygons.append(placement.polygon)
-                placed_counts[part.part_id] += 1
-                area_contribution[part.part_id] += float(placement.polygon.area)
-                if mode == "batch_quantity":
-                    remaining[part.part_id] = max(remaining[part.part_id] - 1, 0)
-                    if all(value == 0 for value in remaining.values()):
-                        stop_filling = True
-                placed_any = True
+            placement = _select_next_placement(
+                parts=active_parts,
+                sheet=sheet,
+                placed_polygons=placed_polygons,
+                placed_counts=placed_counts,
+                rotations=rotations,
+                gap=gap,
+                mode=mode,
+                remaining=remaining,
+            )
+            if not placement:
                 break
-            if not placed_any:
-                break
+            layout_map.setdefault((sheet.sheet_id, instance), []).append(placement)
+            placed_polygons.append(placement.polygon)
+            placed_counts[placement.part_id] += 1
+            area_contribution[placement.part_id] += float(placement.polygon.area)
+            if mode == "batch_quantity":
+                remaining[placement.part_id] = max(remaining[placement.part_id] - 1, 0)
+                if all(value == 0 for value in remaining.values()):
+                    stop_filling = True
         if stop_filling:
             break
 
@@ -350,19 +541,23 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         layout["placements"].sort(key=lambda item: (item.y, item.x, item.part_id, item.instance))
     debug_summary = _validate_layout_metrics(layouts, total_sheet_area, used_area, scrap_area, yield_value)
 
-    part_summaries = [
+    parts_summary = {
+        "total_parts": len(enabled_parts),
+    }
+
+    part_results = [
         {
             "part_id": part.part_id,
             "filename": part.filename,
-            "requested_quantity": part.quantity if mode == "batch_quantity" else None,
+            "requested_quantity": max(part.quantity, 1),
             "placed_quantity": placed_counts[part.part_id],
-            "remaining_quantity": max(remaining[part.part_id], 0) if mode == "batch_quantity" else None,
+            "remaining_quantity": max(max(part.quantity, 1) - placed_counts[part.part_id], 0),
             "enabled": part.enabled,
             "area_contribution": area_contribution[part.part_id],
         }
-        for part in _candidate_parts(active_parts, mode, remaining) + [part for part in active_parts if part.part_id not in {item.part_id for item in _candidate_parts(active_parts, mode, remaining)}]
+        for part in enabled_parts
     ]
-    part_summaries.sort(key=lambda item: (item["filename"] or item["part_id"], item["part_id"]))
+    part_results.sort(key=lambda item: (item["filename"] or item["part_id"], item["part_id"]))
 
     unplaced = sorted(
         [part_id for part_id, count in remaining.items() if count > 0]
@@ -380,9 +575,32 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     if mode == "fill_sheet" and parts_placed <= 1:
         if len(active_parts) >= 1 and any(p.polygon.area * 4 <= sheet.width * sheet.height for p in active_parts for sheet in sheets):
             warnings.append("Fill Sheet mode only placed one part. Check part size, sheet size, and valid geometry. This may indicate a scale mismatch or unusually large parts.")
+    for part in enabled_parts:
+        requested_quantity = max(part.quantity, 1)
+        placed_quantity = placed_counts[part.part_id]
+        remaining_quantity = max(requested_quantity - placed_quantity, 0)
+        if not _is_nestable_part(part):
+            warnings.append(
+                f"Part {part.filename or part.part_id} was skipped because its geometry is invalid or zero-area after validation."
+            )
+            continue
+        if not fit_on_empty_sheet[part.part_id]:
+            warnings.append(
+                f"Part {part.filename or part.part_id} does not fit within the available sheet bounds for any allowed rotation."
+            )
+            continue
+        if mode == "batch_quantity" and remaining_quantity > 0:
+            warnings.append(
+                f"Part {part.filename or part.part_id} placed {placed_quantity} of {requested_quantity}; remaining quantity stays above zero because no more feasible placements fit on the available sheets."
+            )
+        if mode == "fill_sheet" and placed_quantity == 0:
+            warnings.append(
+                f"Part {part.filename or part.part_id} was enabled for Fill Sheet, but no feasible placement remained once the sheet was packed."
+            )
 
     result = {
         "mode": mode,
+        "summary": parts_summary,
         "yield": yield_value,
         "yield_ratio": yield_value,
         "scrap_ratio": scrap_ratio,
@@ -390,9 +608,10 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         "used_area": used_area,
         "total_sheet_area": total_sheet_area,
         "parts_placed": parts_placed,
+        "total_parts_placed": parts_placed,
         "layouts_used": layouts_used,
         "layouts": layouts,
-        "part_summaries": part_summaries,
+        "parts": part_results,
         "unplaced_parts": unplaced,
         "warnings": warnings,
     }

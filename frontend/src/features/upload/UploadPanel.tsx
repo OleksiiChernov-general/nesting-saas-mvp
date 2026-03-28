@@ -40,15 +40,15 @@ export function UploadPanel({
   };
 
   const statusClassName: Record<UploadedFileStatus, string> = {
-    selected: "bg-slate-100 text-slate-700",
-    uploading: "bg-sky-50 text-sky-700",
-    uploaded: "bg-indigo-50 text-indigo-700",
-    parsed: "bg-emerald-50 text-emerald-700",
-    failed: "bg-rose-50 text-rose-700",
+    selected: "bg-slate-800 text-slate-200",
+    uploading: "bg-sky-500/15 text-sky-300",
+    uploaded: "bg-indigo-500/15 text-indigo-300",
+    parsed: "bg-emerald-500/15 text-emerald-300",
+    failed: "bg-rose-500/15 text-rose-300",
   };
 
   return (
-    <Panel title="Upload DXF" subtitle="Import a DXF file and extract closed polygons.">
+    <Panel title="Upload DXF" subtitle="Import one or more DXF files and extract closed polygons for the current nesting job.">
       <input
         ref={inputRef}
         accept=".dxf"
@@ -59,7 +59,7 @@ export function UploadPanel({
         type="file"
       />
       <button
-        className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+        className="w-full rounded-2xl bg-[linear-gradient(135deg,var(--brand-primary)_0%,#059669_100%)] px-4 py-3 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(16,185,129,0.22)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:shadow-none"
         disabled={loading}
         onClick={() => inputRef.current?.click()}
         type="button"
@@ -73,25 +73,25 @@ export function UploadPanel({
             ? `${files.length} file(s) in the upload list`
             : "No DXF files selected yet"
         }
-        className="block w-full rounded-2xl border border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700"
+        className="block w-full rounded-2xl border border-[color:var(--border)] bg-black/20 px-3 py-3 text-sm text-slate-300"
       />
       <StatusMessage message={statusMessage} tone={error ? "error" : files.some((file) => file.status === "parsed") ? "success" : "neutral"} />
       {files.length > 0 ? (
-        <div className="space-y-3 rounded-2xl bg-slate-50 px-4 py-4">
-          <div className="text-sm font-semibold text-slate-900">Uploaded files</div>
+        <div className="space-y-3 rounded-[1.5rem] border border-[color:var(--border)] bg-black/15 px-4 py-4">
+          <div className="text-sm font-semibold text-slate-100">Uploaded files</div>
           {files.map((file) => (
-            <div key={file.id} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div key={file.id} className="rounded-2xl border border-[color:var(--border)] bg-white/[0.03] px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-slate-900">{file.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">
+                  <div className="truncate text-sm font-semibold text-slate-100">{file.name}</div>
+                  <div className="mt-1 text-xs text-slate-400">
                     Polygons: {file.polygons} | Invalid shapes: {file.invalidShapes}
                   </div>
                   {file.detectedUnits ? (
-                    <div className="mt-1 text-xs text-slate-500">Detected units: {file.detectedUnits}</div>
+                    <div className="mt-1 text-xs text-slate-400">Detected units: {file.detectedUnits}</div>
                   ) : null}
-                  {file.auditWarning ? <div className="mt-2 text-xs text-amber-700">{file.auditWarning}</div> : null}
-                  {file.error ? <div className="mt-2 text-xs text-rose-700">{file.error}</div> : null}
+                  {file.auditWarning ? <div className="mt-2 text-xs text-amber-300">{file.auditWarning}</div> : null}
+                  {file.error ? <div className="mt-2 text-xs text-rose-300">{file.error}</div> : null}
                 </div>
                 <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusClassName[file.status]}`}>
                   {file.status}

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiClient, ApiError } from "../api/client";
 import { ConnectionBadge } from "../components/ConnectionBadge";
 import { EmptyState } from "../components/EmptyState";
+import { LogoSVG } from "../components/LogoSVG";
 import { StatusMessage } from "../components/StatusMessage";
 import { MetricsPanel } from "../features/metrics/MetricsPanel";
 import { type NestingFormState, NestingFormPanel } from "../features/nesting/NestingFormPanel";
@@ -10,7 +11,7 @@ import { JobStatusPanel } from "../features/status/JobStatusPanel";
 import { CleanupPanel } from "../features/upload/CleanupPanel";
 import { type UploadedFileItem, UploadPanel } from "../features/upload/UploadPanel";
 import { LayoutViewer } from "../features/viewer/LayoutViewer";
-import type { CleanGeometryResponse, ImportResponse, JobResponse, NestingResultResponse } from "../types/api";
+import type { CleanGeometryResponse, ImportResponse, JobResponse, NestingResultResponse, PolygonPayload } from "../types/api";
 import { parseInteger, parseNonNegativeNumber, parsePositiveNumber } from "../utils/numbers";
 
 const POLLING_INTERVAL_MS = 1500;
@@ -21,14 +22,50 @@ const defaultForm: NestingFormState = {
   sheetWidth: "100",
   sheetHeight: "100",
   sheetQuantity: "1",
+  sheetUnits: "mm",
   gap: "2",
   objective: "MAX_YIELD",
   debug: true,
 };
 
 type UploadedImportItem = UploadedFileItem & {
+  partId: string;
   response?: ImportResponse;
+  cleanupRemoved: number;
+  cleanupInvalidShapes: number;
+  cleanupError: string | null;
+  cleanedPolygons: PolygonPayload[];
+  nestingPolygon: PolygonPayload | null;
+  quantity: string;
+  enabled: boolean;
+  fillOnly: boolean;
 };
+
+function polygonArea(polygon: PolygonPayload): number {
+  let area = 0;
+  for (let index = 0; index < polygon.points.length - 1; index += 1) {
+    const current = polygon.points[index];
+    const next = polygon.points[index + 1];
+    area += current.x * next.y - next.x * current.y;
+  }
+  return Math.abs(area) / 2;
+}
+
+function pickPrimaryPolygon(polygons: PolygonPayload[]): PolygonPayload | null {
+  if (polygons.length === 0) return null;
+  return [...polygons].sort((left, right) => polygonArea(right) - polygonArea(left))[0] ?? null;
+}
+
+function resetPartProcessingState(file: UploadedImportItem): UploadedImportItem {
+  return {
+    ...file,
+    cleanupRemoved: 0,
+    cleanupInvalidShapes: 0,
+    cleanupError: null,
+    cleanedPolygons: [],
+    nestingPolygon: null,
+  };
+}
 
 export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -184,14 +221,29 @@ export function App() {
     };
   }, [uploadedFiles]);
 
+  const cleanupReadyParts = useMemo(
+    () => uploadedFiles.filter((file) => file.enabled && file.nestingPolygon),
+    [uploadedFiles],
+  );
+
   const validationErrors = useMemo(() => {
-    const errors: Partial<Record<keyof NestingFormState, string>> = {};
+    const errors: Partial<Record<keyof NestingFormState | "parts", string>> = {};
     if (!(Number(form.sheetWidth) > 0)) errors.sheetWidth = "Width must be greater than 0.";
     if (!(Number(form.sheetHeight) > 0)) errors.sheetHeight = "Height must be greater than 0.";
     if (!(Number(form.sheetQuantity) >= 1)) errors.sheetQuantity = "Quantity must be at least 1.";
     if (!(Number(form.gap) >= 0)) errors.gap = "Gap must be 0 or greater.";
+
+    const enabledParts = uploadedFiles.filter((file) => file.enabled);
+    if (enabledParts.length === 0) {
+      errors.parts = "Enable at least one part before running nesting.";
+    } else if (!enabledParts.some((file) => file.nestingPolygon)) {
+      errors.parts = "At least one enabled part must have a valid cleaned polygon.";
+    } else if (form.nestingMode === "batch_quantity" && enabledParts.some((file) => parseInteger(file.quantity, 0) < 1)) {
+      errors.parts = "Batch Quantity mode requires quantity >= 1 for every enabled part.";
+    }
+
     return errors;
-  }, [form]);
+  }, [form.gap, form.nestingMode, form.sheetHeight, form.sheetQuantity, form.sheetWidth, uploadedFiles]);
 
   const previewPolygons = cleanupResult?.polygons ?? importResult?.polygons ?? [];
   const canShowResult = Boolean(result && job?.state === "SUCCEEDED");
@@ -202,9 +254,9 @@ export function App() {
     const detectedUnits = Array.from(new Set(audits.map((audit) => audit.detected_units).filter(Boolean)));
     const warnings = audits.flatMap((audit) => audit.warnings);
     const maxExtent = Math.max(...audits.map((audit) => audit.geometry_stats.max_extent ?? 0));
-    const totalArea = audits.reduce((sum, audit) => sum + audit.geometry_stats.total_area, 0);
-    return { detectedUnits, warnings, maxExtent, totalArea };
+    return { detectedUnits, warnings, maxExtent };
   }, [uploadedFiles]);
+
   const scaleWarning = useMemo(() => {
     if (!importAudit) return null;
     const width = Number(form.sheetWidth);
@@ -223,10 +275,27 @@ export function App() {
 
   const handleFilesSelected = async (nextFiles: File[]) => {
     if (nextFiles.length === 0) return;
-    resetDownstreamState();
+
+    if (pollTimeoutRef.current) {
+      window.clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    pollTokenRef.current += 1;
+    setPolling(false);
+    setCleanupLoading(false);
+    setJobLoading(false);
+    setCleanupError(null);
+    setJobError(null);
+    setCleanupResult(null);
+    setJob(null);
+    setResult(null);
+    setActiveSheetIndex(0);
+    setScaleWarningAcknowledged(false);
     setUploadError(null);
+
     const queuedFiles = nextFiles.map((file, index) => ({
       id: `${file.name}-${file.size}-${Date.now()}-${index}`,
+      partId: `part-${Date.now()}-${index + 1}`,
       name: file.name,
       status: "selected" as const,
       polygons: 0,
@@ -234,8 +303,17 @@ export function App() {
       error: null,
       detectedUnits: null,
       auditWarning: null,
+      cleanupRemoved: 0,
+      cleanupInvalidShapes: 0,
+      cleanupError: null,
+      cleanedPolygons: [],
+      nestingPolygon: null,
+      quantity: "1",
+      enabled: true,
+      fillOnly: false,
     }));
-    setUploadedFiles((current) => [...current, ...queuedFiles]);
+
+    setUploadedFiles((current) => [...current.map(resetPartProcessingState), ...queuedFiles]);
     setUploading(true);
 
     try {
@@ -267,9 +345,7 @@ export function App() {
         } catch (error) {
           const message = getReadableError(error, "Upload failed.");
           setUploadedFiles((current) =>
-            current.map((file) =>
-              file.id === queuedFile.id ? { ...file, status: "failed", error: message } : file,
-            ),
+            current.map((file) => (file.id === queuedFile.id ? { ...file, status: "failed", error: message } : file)),
           );
           setUploadError(message);
         }
@@ -287,20 +363,68 @@ export function App() {
     setResult(null);
     setJobError(null);
 
-    try {
-      const response = await apiClient.cleanGeometry(importResult.polygons);
-      setCleanupResult(response);
-      setConnected(true);
-    } catch (error) {
-      setCleanupError(getReadableError(error, "Geometry cleanup failed."));
-      setConnected(false);
-    } finally {
-      setCleanupLoading(false);
+    const nextFiles: UploadedImportItem[] = [];
+    let fatalError: string | null = null;
+
+    for (const file of uploadedFiles) {
+      if (!file.response) {
+        nextFiles.push(resetPartProcessingState(file));
+        continue;
+      }
+
+      if (file.response.polygons.length === 0) {
+        nextFiles.push({
+          ...resetPartProcessingState(file),
+          cleanupError: "Import produced no valid polygons.",
+        });
+        continue;
+      }
+
+      try {
+        const response = await apiClient.cleanGeometry(file.response.polygons);
+        const primaryPolygon = pickPrimaryPolygon(response.polygons);
+        const cleanedIssue =
+          response.polygons.length === 0
+            ? "Cleanup removed all polygons."
+            : response.polygons.length > 1
+              ? "Multiple cleaned polygons found. Nesting uses the largest polygon from this file."
+              : null;
+        nextFiles.push({
+          ...file,
+          cleanupRemoved: response.removed,
+          cleanupInvalidShapes: response.invalid_shapes.length,
+          cleanupError: cleanedIssue,
+          cleanedPolygons: response.polygons,
+          nestingPolygon: primaryPolygon,
+        });
+      } catch (error) {
+        fatalError = getReadableError(error, "Geometry cleanup failed.");
+        nextFiles.push({
+          ...resetPartProcessingState(file),
+          cleanupError: fatalError,
+        });
+      }
     }
+
+    setUploadedFiles(nextFiles);
+    setCleanupResult({
+      polygons: nextFiles.flatMap((file) => file.cleanedPolygons),
+      removed: nextFiles.reduce((sum, file) => sum + file.cleanupRemoved, 0),
+      invalid_shapes: nextFiles.flatMap((file) => {
+        if (!file.cleanupInvalidShapes) return [];
+        return Array.from({ length: file.cleanupInvalidShapes }, (_, index) => ({
+          source: file.name,
+          reason: file.cleanupError ?? `Cleanup warning ${index + 1}`,
+        }));
+      }),
+    });
+    setCleanupError(fatalError);
+    setConnected(!fatalError);
+    setCleanupLoading(false);
   };
 
   const handleRunJob = async () => {
-    if (!cleanupResult || cleanupResult.polygons.length === 0) return;
+    if (cleanupReadyParts.length === 0) return;
     setJobLoading(true);
     setJobError(null);
     setResult(null);
@@ -314,16 +438,19 @@ export function App() {
 
       const response = await apiClient.createJob({
         mode: form.nestingMode,
-        parts: cleanupResult.polygons.map((polygon, index) => ({
-          part_id: `part-${index + 1}`,
-          quantity: form.nestingMode === "fill_sheet" ? 1 : 1,
-          polygon,
+        parts: cleanupReadyParts.map((part) => ({
+          part_id: part.partId,
+          filename: part.name,
+          quantity: form.nestingMode === "batch_quantity" ? parseInteger(part.quantity, 1) : undefined,
+          enabled: part.enabled,
+          fill_only: form.nestingMode === "fill_sheet" ? part.fillOnly : false,
+          polygon: part.nestingPolygon as PolygonPayload,
         })),
-        sheets: [{ sheet_id: "sheet-1", width, height, quantity }],
+        sheet: { sheet_id: "sheet-1", width, height, quantity, units: form.sheetUnits },
         params: {
           gap,
           rotation: [0, 180],
-          objective: form.objective,
+          objective: form.objective === "MIN_SHEETS" ? "min_sheets" : "maximize_yield",
           debug: form.debug,
           source_units: importAudit?.detectedUnits.join(", ") ?? null,
           source_max_extent: importAudit?.maxExtent ?? null,
@@ -341,50 +468,99 @@ export function App() {
   };
 
   const handleFormChange = <K extends keyof NestingFormState>(field: K, value: NestingFormState[K]) => {
+    resetDownstreamState();
     setForm((current) => ({ ...current, [field]: value }) as NestingFormState);
+  };
+
+  const handlePartChange = (partId: string, patch: Partial<Pick<UploadedImportItem, "quantity" | "enabled" | "fillOnly">>) => {
+    resetDownstreamState();
+    setUploadedFiles((current) =>
+      current.map((file) => (file.id === partId ? { ...file, ...patch } : file)),
+    );
+  };
+
+  const handleRemovePart = (partId: string) => {
+    resetDownstreamState();
+    setUploadedFiles((current) => current.filter((file) => file.id !== partId));
   };
 
   const uploadStatus = uploading
     ? "Uploading DXF files to the backend..."
     : importResult
-      ? `Upload succeeded. ${importResult.polygons.length} polygon(s) from ${uploadedFiles.filter((file) => file.response).length} file(s) are ready.`
+      ? `Upload succeeded. ${uploadedFiles.filter((file) => file.response).length} file(s) are ready for cleanup and part configuration.`
       : uploadedFiles.some((file) => file.status === "failed")
         ? "One or more uploads failed. Review the uploaded-files list."
-        : "Select one or more DXF files to upload parts for one nesting run.";
+        : "Step 1: Select one or more DXF files to build a multi-part nesting job.";
   const cleanupStatus = cleanupLoading
-    ? "Cleaning geometry..."
-    : cleanupResult
-      ? "Cleanup succeeded. Nesting is now available."
+    ? "Cleaning geometry for each uploaded part..."
+    : cleanupResult && cleanupResult.polygons.length > 0
+      ? "Step 2 complete. Part geometry is cleaned and the production workflow is ready."
       : !importResult
-        ? "Upload a DXF before cleanup."
-        : importResult.polygons.length === 0
-          ? `Cleanup is disabled because the import produced 0 valid polygons. ${importResult.invalid_shapes.length} shape(s) were rejected before cleanup.`
-        : "Run geometry cleanup to validate imported polygons.";
+        ? "Upload DXF files before cleanup."
+        : "Step 2: Run cleanup so each uploaded file has validated nesting geometry.";
   const nestingStatus = jobLoading
     ? "Submitting nesting job..."
     : job?.state === "FAILED"
       ? "Previous job failed. Update inputs if needed and run again."
-      : cleanupResult
-        ? "Configure sheet stock and run nesting."
+      : cleanupReadyParts.length > 0
+        ? "Step 6: Review the part list, choose the mode, and run nesting."
         : "Cleanup must succeed before nesting.";
+  const heroStats = [
+    { label: "Uploaded parts", value: `${uploadedFiles.length}` },
+    { label: "Ready geometry", value: `${cleanupReadyParts.length}` },
+    { label: "Layouts", value: `${result?.layouts_used ?? result?.layouts.length ?? 0}` },
+    { label: "Placed parts", value: `${result?.total_parts_placed ?? result?.parts_placed ?? 0}` },
+  ];
 
   return (
     <div className="min-h-screen px-4 py-6 text-ink md:px-6 lg:px-8">
       <div className="mx-auto max-w-[1600px]">
-        <header className="mb-6 flex flex-col gap-4 rounded-[2rem] border border-slate-200 bg-white/80 px-6 py-5 shadow-panel backdrop-blur lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-accent">2D Material Optimization</p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink">Nesting SaaS MVP</h1>
-          </div>
-          <div className="flex items-center gap-3">
-            <ConnectionBadge checking={healthChecking} connected={connected} />
-            <button
-              className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
-              onClick={() => resetWorkflow()}
-              type="button"
-            >
-              Reset
-            </button>
+        <header className="mb-6 overflow-hidden rounded-[2.5rem] border border-[color:var(--border)] bg-[linear-gradient(135deg,rgba(17,24,39,0.96)_0%,rgba(10,12,16,0.98)_55%,rgba(16,185,129,0.08)_100%)] shadow-panel">
+          <div className="grid gap-8 px-6 py-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)] lg:px-8 lg:py-8">
+            <div>
+              <div className="flex items-center gap-4">
+                <LogoSVG className="flex items-center gap-3" />
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-300">Industrial Nesting Platform</p>
+                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink md:text-5xl">Nestora</h1>
+                </div>
+              </div>
+              <p className="mt-5 max-w-3xl text-base leading-7 text-slate-300 md:text-lg">
+                Production-ready 2D nesting for DXF workflows. Import geometry, validate parts, run mixed placement jobs, and review real material metrics in one branded workspace.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <div className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300">
+                  Dark production workspace
+                </div>
+                <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-amber-200">
+                  Mixed nesting ready
+                </div>
+                <div className="rounded-full border border-slate-700 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">
+                  Backend-driven metrics
+                </div>
+              </div>
+            </div>
+            <div className="rounded-[2rem] border border-[color:var(--border)] bg-black/20 p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-slate-100">Workspace status</div>
+                <ConnectionBadge checking={healthChecking} connected={connected} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {heroStats.map((item) => (
+                  <div key={item.label} className="rounded-2xl border border-[color:var(--border)] bg-white/[0.03] px-4 py-4">
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{item.label}</div>
+                    <div className="mt-2 text-2xl font-semibold text-white">{item.value}</div>
+                  </div>
+                ))}
+              </div>
+              <button
+                className="mt-4 w-full rounded-full border border-[color:var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-accent hover:text-white"
+                onClick={() => resetWorkflow()}
+                type="button"
+              >
+                Reset Workspace
+              </button>
+            </div>
           </div>
         </header>
 
@@ -399,7 +575,7 @@ export function App() {
 
         {uploadedFiles.length === 0 ? <EmptyState onBrowseClick={() => fileInputRef.current?.click()} /> : null}
 
-        <div className="mt-6 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)_320px]">
+        <div className="mt-6 grid gap-6 xl:grid-cols-[430px_minmax(0,1fr)_350px]">
           <aside className="space-y-6">
             <UploadPanel
               error={uploadError}
@@ -418,13 +594,27 @@ export function App() {
               statusMessage={cleanupStatus}
             />
             <NestingFormPanel
-              cleanupReady={Boolean(cleanupResult && cleanupResult.polygons.length > 0)}
+              cleanupReady={cleanupReadyParts.length > 0}
               errors={validationErrors}
               form={form}
               loading={jobLoading}
               onChange={handleFormChange}
+              onPartChange={handlePartChange}
+              onRemovePart={handleRemovePart}
               onScaleWarningAcknowledged={setScaleWarningAcknowledged}
               onSubmit={handleRunJob}
+              parts={uploadedFiles.map((file) => ({
+                id: file.id,
+                filename: file.name,
+                parsedPolygonCount: file.polygons,
+                cleanedPolygonCount: file.cleanedPolygons.length,
+                units: file.detectedUnits ?? null,
+                quantity: file.quantity,
+                enabled: file.enabled,
+                fillOnly: file.fillOnly,
+                hasGeometry: Boolean(file.nestingPolygon),
+                cleanupIssue: file.cleanupError,
+              }))}
               scaleWarning={scaleWarning}
               scaleWarningAcknowledged={scaleWarningAcknowledged}
               statusMessage={nestingStatus}

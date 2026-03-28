@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import JobState
 
@@ -87,21 +87,22 @@ class PartInput(BaseModel):
     part_id: str
     filename: str | None = None
     polygon: PolygonPayload
-    quantity: int = Field(default=1, ge=1)
+    quantity: int | None = Field(default=None, ge=1)
     enabled: bool = True
     fill_only: bool = False
 
 
 class SheetInput(BaseModel):
-    sheet_id: str
+    sheet_id: str = "sheet-1"
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     quantity: int = Field(default=1, ge=1)
+    units: str = "mm"
 
 
 class NestingParams(BaseModel):
     gap: float = Field(default=0.0, ge=0)
-    rotation: list[Literal[0, 180]] = Field(default_factory=lambda: [0, 180])
+    rotation: list[Literal[0, 90, 180, 270]] = Field(default_factory=lambda: [0, 180])
     objective: str = "maximize_yield"
     debug: bool = False
     source_units: str | None = None
@@ -109,18 +110,50 @@ class NestingParams(BaseModel):
 
 
 class NestingJobCreateRequest(BaseModel):
-    mode: Literal["fill_sheet", "batch_quantity"] = "batch_quantity"
+    mode: Literal["fill_sheet", "batch_quantity"]
     parts: list[PartInput]
-    sheets: list[SheetInput]
+    sheet: SheetInput | None = None
+    sheets: list[SheetInput] = Field(default_factory=list)
     params: NestingParams = Field(default_factory=NestingParams)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_sheet_payload(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        sheet = data.get("sheet")
+        sheets = data.get("sheets")
+        if sheet and not sheets:
+            data["sheets"] = [sheet]
+        elif sheets and not sheet and isinstance(sheets, list) and sheets:
+            data["sheet"] = sheets[0]
+        return data
 
-class PartSummaryResponse(BaseModel):
+    @model_validator(mode="after")
+    def validate_multi_part_job(self) -> "NestingJobCreateRequest":
+        if not self.sheets:
+            raise ValueError("sheet is required")
+        enabled_parts = [part for part in self.parts if part.enabled]
+        if not enabled_parts:
+            raise ValueError("At least one enabled part is required")
+        if self.mode == "batch_quantity":
+            invalid_parts = [part.part_id for part in enabled_parts if part.quantity is None or part.quantity < 1]
+            if invalid_parts:
+                raise ValueError(f"Batch Quantity mode requires quantity >= 1 for enabled parts: {', '.join(invalid_parts)}")
+        return self
+
+
+class NestingPartsSummaryResponse(BaseModel):
+    total_parts: int
+
+
+class PartResultResponse(BaseModel):
     part_id: str
     filename: str | None = None
-    requested_quantity: int | None = None
+    requested_quantity: int
     placed_quantity: int
-    remaining_quantity: int | None = None
+    remaining_quantity: int
     enabled: bool = True
     area_contribution: float
 
@@ -131,6 +164,9 @@ class JobResponse(BaseModel):
     progress: float = 0.0
     status_message: str | None = None
     error: str | None = None
+    mode: Literal["fill_sheet", "batch_quantity"] | None = None
+    summary: NestingPartsSummaryResponse | None = None
+    parts: list[PartResultResponse] = Field(default_factory=list)
     artifact_url: str | None = None
     created_at: str | None = None
     queued_at: str | None = None
@@ -209,6 +245,7 @@ class NestingDebugResponse(BaseModel):
 
 class NestingResultResponse(BaseModel):
     mode: Literal["fill_sheet", "batch_quantity"] = "batch_quantity"
+    summary: NestingPartsSummaryResponse
     yield_value: float = Field(alias="yield")
     yield_ratio: float | None = None
     scrap_ratio: float | None = None
@@ -216,9 +253,10 @@ class NestingResultResponse(BaseModel):
     used_area: float
     total_sheet_area: float
     parts_placed: int | None = None
+    total_parts_placed: int | None = None
     layouts_used: int | None = None
     layouts: list[SheetLayoutResponse]
-    part_summaries: list[PartSummaryResponse] = Field(default_factory=list)
+    parts: list[PartResultResponse] = Field(default_factory=list)
     unplaced_parts: list[str]
     warnings: list[str] = Field(default_factory=list)
     debug: NestingDebugResponse | None = None

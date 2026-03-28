@@ -147,6 +147,30 @@ export function normalizeJobResponse(value: unknown): JobResponse {
     progress: toNumber(record?.progress),
     status_message: typeof record?.status_message === "string" ? record.status_message : null,
     error: typeof record?.error === "string" ? record.error : null,
+    mode:
+      record?.mode === "fill_sheet" || record?.mode === "batch_quantity"
+        ? (record.mode as JobResponse["mode"])
+        : null,
+    summary:
+      record?.summary && typeof record.summary === "object"
+        ? {
+            total_parts: toNumber((record.summary as Record<string, unknown>).total_parts),
+          }
+        : null,
+    parts: Array.isArray(record?.parts)
+      ? record.parts.map((item, index) => {
+          const part = item as Record<string, unknown> | null;
+          return {
+            part_id: toStringValue(part?.part_id, `part-${index + 1}`),
+            filename: typeof part?.filename === "string" ? part.filename : null,
+            requested_quantity: Math.max(1, toNumber(part?.requested_quantity, 1)),
+            placed_quantity: toNumber(part?.placed_quantity),
+            remaining_quantity: Math.max(0, toNumber(part?.remaining_quantity)),
+            enabled: typeof part?.enabled === "boolean" ? part.enabled : true,
+            area_contribution: toNumber(part?.area_contribution),
+          };
+        })
+      : [],
     artifact_url: artifactUrl,
     created_at: typeof record?.created_at === "string" ? record.created_at : null,
     queued_at: typeof record?.queued_at === "string" ? record.queued_at : null,
@@ -254,6 +278,20 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
         ? toNumber(record?.scrap_area) / toNumber(record?.total_sheet_area)
         : 0;
   return {
+    mode:
+      record?.mode === "fill_sheet" || record?.mode === "batch_quantity"
+        ? (record.mode as NestingResultResponse["mode"])
+        : "batch_quantity",
+    summary:
+      record?.summary && typeof record.summary === "object"
+        ? {
+            total_parts: toNumber((record.summary as Record<string, unknown>).total_parts),
+          }
+        : {
+            total_parts: Array.isArray(record?.parts)
+              ? record.parts.length
+                : 0,
+          },
     yield: yieldValue,
     yield_value: yieldValue,
     yield_ratio: typeof record?.yield_ratio === "number" ? record.yield_ratio : yieldValue,
@@ -261,11 +299,26 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
     scrap_area: toNumber(record?.scrap_area),
     used_area: toNumber(record?.used_area),
     total_sheet_area: toNumber(record?.total_sheet_area),
-    parts_placed: toNumber(record?.parts_placed),
+    parts_placed: toNumber(record?.parts_placed || record?.total_parts_placed),
+    total_parts_placed: toNumber(record?.total_parts_placed || record?.parts_placed),
     layouts_used: toNumber(record?.layouts_used),
     layouts: Array.isArray(record?.layouts)
       ? record.layouts.map((item, index) => normalizeLayout(item, index)).filter((item): item is SheetLayoutResponse => item !== null)
       : [],
+    parts: Array.isArray(record?.parts)
+      ? record.parts.map((item, index) => {
+          const part = item as Record<string, unknown> | null;
+          return {
+            part_id: toStringValue(part?.part_id, `part-${index + 1}`),
+            filename: typeof part?.filename === "string" ? part.filename : null,
+            requested_quantity: Math.max(1, toNumber(part?.requested_quantity, 1)),
+            placed_quantity: toNumber(part?.placed_quantity),
+            remaining_quantity: Math.max(0, toNumber(part?.remaining_quantity)),
+            enabled: typeof part?.enabled === "boolean" ? part.enabled : true,
+            area_contribution: toNumber(part?.area_contribution),
+          };
+        })
+        : [],
     unplaced_parts: Array.isArray(record?.unplaced_parts)
       ? record.unplaced_parts.map((item, index) => toStringValue(item, `part-${index + 1}`))
       : [],

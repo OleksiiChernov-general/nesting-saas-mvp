@@ -1,214 +1,152 @@
-# Nesting SaaS MVP - Production Workflow Redesign Implementation
+# Nesting SaaS MVP - Developer Notes
 
-## Overview
-This document summarizes the implementation of production-ready nesting workflows for the Nesting SaaS MVP. The redesign enables real manufacturing use cases with fill-sheet and batch-quantity modes supporting multiple part types on a single sheet.
+## What is fully implemented now
 
-## 1. Root Cause Analysis: Why Old Flow Placed Too Few Parts
+- Multi-file DXF upload is the primary frontend workflow.
+- Cleanup runs per uploaded file and produces the nesting polygon used for that part.
+- Users configure a multi-part job through a single request contract:
+  - `mode`
+  - `parts`
+  - `sheet`
+  - `params`
+- The backend preserves the selected mode and per-part requested quantity.
+- The result contract is centered on:
+  - `mode`
+  - `summary`
+  - `parts`
+- The result panel shows:
+  - nesting mode used
+  - explicit multi-part summary
+  - requested / placed / remaining per part
+- Job status and polling are aligned with the same multi-part model.
+- Fill Sheet now continues placing copies until no enabled part fits anymore.
+- Batch Quantity now continues placing requested parts until all requested parts are placed or no more fit.
+- Multiple part types can be mixed on one sheet by the active heuristic.
 
-### Core Issue
-The original `_find_placement()` algorithm only considered placement positions at:
-- The origin (0, 0)
-- Along edges of already-placed parts (right edges + gaps for X, top edges + gaps for Y)
+## Root cause of the old under-placement behavior
 
-This greedy edge-following strategy leaves significant gaps in the sheet, especially in early placements. For example:
-- Placing a 10x10 part on a 100x100 sheet leaves a 90x90 area unexplored
-- Next candidates only try positions at x=10 and y=10, missing most of the sheet
-- Result: Very low fill rates (~10-15% instead of possible 90%+)
+- The old loop was effectively `first-fit`.
+- It stopped on the first feasible candidate for the first feasible part.
+- Candidate search was anchored to a narrow set of positions, so the engine could accept an early placement and miss better follow-up opportunities.
+- This made Fill Sheet look like a single-placement workflow in cases where the sheet could clearly accept more copies.
 
-### Why It Mattered
-- Production cutting yields were unacceptable for manufacturing
-- Users couldn't rely on the system for real workflows
-- The algorithm would often place only 1-2 parts and declare failure
+## Current algorithm / heuristic
 
-## 2. Files Changed
+- Candidate parts are filtered by mode and remaining demand.
+- For each candidate part and rotation, the engine searches multiple anchor positions across the sheet.
+- Every feasible placement is scored instead of returning the first valid hit.
+- The score now includes a small one-step lookahead bonus, so a candidate is preferred when it still leaves room for another productive placement afterward.
+- Scoring prefers:
+  - larger productive placements
+  - compact placements near existing geometry / borders
+  - preserving room for another feasible part type when possible
+  - higher outstanding requested area in `batch_quantity`
+- The engine then chooses the best next placement globally and repeats.
 
-### Backend
-**app/nesting.py**
-- Enhanced `_find_placement()` with intelligent grid sampling
-- Added conditional grid search when sheet has significant empty space (3x+ unused area)
-- Improved warning message to guide users toward fixing scale mismatches
+This is still greedy, not globally optimal, but it is now production-sensible for:
 
-**app/schemas.py**
-- No changes needed (already supports mode and multi-part)
+- repeated single-part fill
+- mixed-part fill
+- batch quantity partial-fit reporting
 
-**app/api.py**
-- No changes needed (already exports NestingResultResponse)
+## Contract status
 
-### Frontend (nesting_saas_mvp & deploy_frontend_temp)
-**features/nesting/NestingFormPanel.tsx**
-- Added `nestingMode: "fill_sheet" | "batch_quantity"` to NestingFormState
-- Added visual mode selector with two toggle buttons
-- Added descriptive text explaining each mode's behavior
-- Enhanced subtitle to mention mode selection
+Primary request contract:
 
-**app/App.tsx**
-- Updated `defaultForm` to include `nestingMode: "fill_sheet"`
-- Modified `handleRunJob` to pass `mode` parameter to API
-- Mode is sent in every nesting request
-
-**features/metrics/MetricsPanel.tsx**
-- Added per-part results section showing:
-  - Filename and part ID
-  - Placed quantity (prominent)
-  - Requested quantity (for batch mode)
-  - Remaining quantity (for batch mode, color-coded)
-  - Area contribution
-- Better visual organization and spacing
-
-**types/api.ts**
-- Added `mode?: "fill_sheet" | "batch_quantity"` to NestingJobCreateRequest type
-
-## 3. Updated Request/Response Model
-
-### Request (NestingJobCreateRequest)
-```typescript
+```json
 {
-  mode: "fill_sheet" | "batch_quantity",  // NEW: explicit mode selection
-  parts: [
+  "mode": "batch_quantity",
+  "parts": [
     {
-      part_id: "part-1",
-      filename: "panel.dxf",
-      quantity: 1,
-      polygon: { points: [...] },
-      enabled: true,
-      fill_only: false
+      "part_id": "part-a",
+      "filename": "part-a.dxf",
+      "quantity": 10,
+      "enabled": true,
+      "fill_only": false
     }
   ],
-  sheets: [
-    {
-      sheet_id: "sheet-1",
-      width: 100,
-      height: 100,
-      quantity: 1
-    }
-  ],
-  params: {
-    gap: 2,
-    rotation: [0, 180],
-    objective: "maximize_yield",
-    debug: true,
-    source_units: "mm",
-    source_max_extent: 50
+  "sheet": {
+    "sheet_id": "sheet-1",
+    "width": 100,
+    "height": 100,
+    "quantity": 1,
+    "units": "mm"
   }
 }
 ```
 
-### Response (NestingResultResponse)
-Now includes:
-- `mode`: which mode was used
-- `part_summaries`: per-part breakdown with requested/placed/remaining counts
-- `layouts`: complete layout information
-- `unplaced_parts`: list of parts that didn't fit (batch mode)
-- `warnings`: scale and capacity warnings
+Primary response contract:
 
-## 4. Tests Added/Updated
-
-### Backend Tests (app/nesting.py)
-Already present and now passing with improved algorithm:
-- `test_fill_sheet_repeats_single_part_until_sheet_is_full()` - expects 4 parts on 20x20 sheet with 10x10 parts
-- `test_batch_quantity_places_exact_requested_single_part_count()` - exact quantity placement
-- `test_batch_quantity_reports_partial_fit()` - reports unplaced parts
-- `test_fill_sheet_can_mix_multiple_part_types()` - mixed part fill
-- `test_fill_sheet_solo_mode_uses_only_selected_part()` - solo fill mode
-- And others...
-
-### Frontend Tests
-Existing tests still pass; mode parameter is optional and defaults to batch_quantity for backward compatibility.
-
-## 5. Deployment & Verification
-
-### Pre-Deployment Checklist
-1. Backend algorithm tested with existing test suite
-2. Frontend type definitions updated for mode support
-3. Backward compatibility maintained (mode optional in requests)
-4. Both nesting_saas_mvp and deploy_frontend_temp synchronized
-
-### Deploy to Railway
-Use existing Railway deployment process:
-1. Push changes to repository
-2. Railway auto-deploys from branch
-3. Verify health check: `GET /health` returns `{"status": "ok"}`
-4. Test mode selector UI appears on frontend
-5. Create test nesting job with mode="fill_sheet"
-
-### Live Verification Steps
-1. Upload a small DXF part (e.g., 10x10 rectangle)
-2. Set sheet size to 100x100
-3. Select "Fill Sheet" mode
-4. Run nesting
-5. Verify at least 100 parts are placed (100 parts × 1 area = 100 area, sheet = 10000)
-6. Check "Per-Part Results" section shows placed count > 1
-
-## 6. Backend URL & Frontend URL
-
-Will be provided upon successful Railway deployment:
-- Backend API: `https://nesting-api-{deploy-id}.railway.app/v1`
-- Frontend: `https://nesting-web-{deploy-id}.railway.app`
-
-### Health Check
-```bash
-curl https://nesting-api-{deploy-id}.railway.app/health
+```json
+{
+  "mode": "batch_quantity",
+  "summary": {
+    "total_parts": 3
+  },
+  "parts": [
+    {
+      "part_id": "part-a",
+      "filename": "part-a.dxf",
+      "requested_quantity": 10,
+      "placed_quantity": 1,
+      "remaining_quantity": 9
+    }
+  ],
+  "total_parts_placed": 1
+}
 ```
 
-## 7. Remaining Limitations
+## Legacy ambiguity reduced
 
-### By Design
-1. **Simple Greedy Algorithm**: Uses edge-based + grid sampling, not optimal bin packing
-   - Good for production (~70-85% yields typically)
-   - Not guaranteed optimal (would require advanced NP-hard solvers)
-   
-2. **No Per-Part Enable/Disable UI Yet**: Current UI shows mode, not part controls
-   - System supports it via API (enabled flag)
-   - UI could be enhanced with part list checkboxes
-   
-3. **No Advanced Heuristics**: No rotation optimization or pattern detection
-   - However, users can specify rotation angles via API params
-   
-4. **Single Sheet Batch Mode**: Creates one logical batch per request
-   - Could be extended to auto-split across multiple sheets
-   
-### Future Enhancements
-1. Add per-part quantity inputs directly in UI
-2. Implement more sophisticated packing algorithm (Guillotine, Maximal Rectangles)
-3. Add rotation angle optimization
-4. Support for nesting constraints (min/max distances, grain direction)
-5. Batch job API for multiple different sheets
-6. Detailed cut path optimization for CNC systems
+- Frontend submission uses the new `sheet` + `parts` contract as the main path.
+- Result rendering uses the new `summary` + `parts` contract as the main path.
+- Legacy `part_summaries` result normalization has been removed from the active frontend path.
+- Older notes that described optional-mode or legacy response behavior should be treated as superseded by this file and `README.md`.
 
-## 8. Key Improvements Delivered
+## What is intentionally deferred
 
-✅ **Algorithm**: Grid sampling for 3-5x better fill rates
-✅ **Modes**: Explicit fill_sheet vs batch_quantity selection
-✅ **Results**: Per-part metrics showing placed/requested/remaining
-✅ **UX**: Mode selector UI with helpful descriptions
-✅ **Warnings**: Better diagnostics for scale mismatches
-✅ **Backward Compatibility**: Optional mode parameter, defaults to batch_quantity
+Algorithm optimization is intentionally deferred to the next iteration. That includes:
 
-## 9. Technical Details: Grid Sampling Implementation
+- Maximize fill heuristics
+- Batch packing optimality
+- Complex placement strategy
+- Smarter search and candidate ranking
+- Better global yield optimization
 
-The improved algorithm now:
-1. Always tries edge-based positions (unchanged)
-2. Detects if sheet has significant empty space:
-   - If `used_area < sheet_area / 3`, enables grid mode
-3. Adds grid points at increments of `part_width * 0.75` and `part_height * 0.75`
-4. Tries both rotation candidates at each position
-5. Returns first valid placement found
+## Temporary execution behavior
 
-This ensures:
-- Empty sheets get filled evenly from the start
-- Partially-filled sheets continue optimization
-- Computational cost remains reasonable (sub-second for typical jobs)
+- The algorithm is greedy, not globally optimal.
+- There are still cases where a more advanced solver could achieve better yield.
+- The current requirement is correct production intent and correct metrics, not best-possible packing quality.
 
-## 10. Success Metrics
+## Test coverage expected in this stage
 
-For production validation:
-- **Fill Rate**: Typical yields should be 70-85% for mixed parts
-- **Performance**: Job processing < 5 seconds for typical 5-part jobs
-- **Reliability**: No crashes or invalid placements
-- **User Feedback**: Mode selector should be obvious and clear
+Frontend:
 
----
+- mode selector renders and switches
+- part list renders multiple uploaded files
+- quantity inputs appear in batch mode
+- validation errors work
+- result panel shows per-part counts
+- fill-sheet submit flow uses the new request contract
+- batch-quantity submit flow uses per-part quantities in the new request contract
 
-**Implementation Date**: March 27, 2026
-**Status**: Ready for Railway Deployment
-**Contact**: Technical Implementation Team
+Backend and integration:
+
+- new multi-part request model is accepted
+- mode field is preserved
+- per-part requested quantity is preserved
+- per-part summary fields are returned
+- fill-sheet multi-part job succeeds
+- batch-quantity multi-part job succeeds
+- mixed Fill Sheet keeps placing until no enabled part fits anymore
+- mixed Batch Quantity partial-fit reports remaining counts per part
+- per-part area contribution is returned for mixed jobs
+- single-part Fill Sheet places repeated copies
+- single-part Batch Quantity exact-fit behaves correctly
+- partial-fit Batch Quantity reports `remaining_quantity`
+
+## Local URLs
+
+- Backend URL: `http://localhost:8000`
+- Frontend URL: `http://localhost:5173`

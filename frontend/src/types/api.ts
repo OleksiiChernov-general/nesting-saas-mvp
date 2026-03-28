@@ -65,24 +65,29 @@ export type CleanGeometryResponse = {
 
 export type PartInput = {
   part_id: string;
-  quantity: number;
+  filename?: string | null;
+  quantity?: number;
+  enabled?: boolean;
+  fill_only?: boolean;
   polygon: PolygonPayload;
 };
 
 export type SheetInput = {
-  sheet_id: string;
+  sheet_id?: string;
   width: number;
   height: number;
-  quantity: number;
+  quantity?: number;
+  units?: string;
 };
 
 export type NestingJobCreateRequest = {
-  mode?: "fill_sheet" | "batch_quantity";
+  mode: "fill_sheet" | "batch_quantity";
   parts: PartInput[];
-  sheets: SheetInput[];
+  sheet: SheetInput;
+  sheets?: SheetInput[];
   params: {
     gap: number;
-    rotation: Array<0 | 180>;
+    rotation: Array<0 | 90 | 180 | 270>;
     objective: string;
     debug?: boolean;
     source_units?: string | null;
@@ -96,6 +101,19 @@ export type JobResponse = {
   progress: number;
   status_message?: string | null;
   error?: string | null;
+  mode?: "fill_sheet" | "batch_quantity" | null;
+  summary?: {
+    total_parts: number;
+  } | null;
+  parts?: Array<{
+    part_id: string;
+    filename?: string | null;
+    requested_quantity: number;
+    placed_quantity: number;
+    remaining_quantity: number;
+    enabled?: boolean;
+    area_contribution: number;
+  }>;
   artifact_url?: string | null;
   created_at?: string | null;
   queued_at?: string | null;
@@ -173,6 +191,10 @@ export type NestingDebugResponse = {
 };
 
 export type NestingResultResponse = {
+  mode?: "fill_sheet" | "batch_quantity";
+  summary: {
+    total_parts: number;
+  };
   yield?: number;
   yield_value?: number;
   yield_ratio?: number;
@@ -181,8 +203,18 @@ export type NestingResultResponse = {
   used_area: number;
   total_sheet_area: number;
   parts_placed?: number;
+  total_parts_placed?: number;
   layouts_used?: number;
   layouts: SheetLayoutResponse[];
+  parts: Array<{
+    part_id: string;
+    filename?: string | null;
+    requested_quantity: number;
+    placed_quantity: number;
+    remaining_quantity: number;
+    enabled?: boolean;
+    area_contribution: number;
+  }>;
   unplaced_parts: string[];
   warnings?: string[];
   debug?: NestingDebugResponse | null;

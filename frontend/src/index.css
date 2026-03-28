@@ -3,22 +3,45 @@
 @tailwind utilities;
 
 :root {
-  color: #0f1720;
+  --brand-primary: #10b981;
+  --brand-accent: #f59e0b;
+  --brand-bg: #0a0c10;
+  --card-bg: #111827;
+  --border: #1f2937;
+  --text-primary: #f9fafb;
+  --text-muted: #9ca3af;
+  color: var(--text-primary);
   background:
-    radial-gradient(circle at top left, rgba(13, 148, 136, 0.12), transparent 26%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2f3 100%);
+    radial-gradient(circle at top left, rgba(16, 185, 129, 0.22), transparent 24%),
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.12), transparent 18%),
+    linear-gradient(180deg, #0a0c10 0%, #0f172a 100%);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+
+html {
+  background: var(--brand-bg);
 }
 
 body {
   margin: 0;
   min-width: 320px;
+  background: transparent;
+  color: var(--text-primary);
 }
 
 button,
 input,
 select {
   font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
 }
 
 * {
