@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.models import JobState
 
 
+RotationAngle = Literal[0, 45, 90, 135, 180, 225, 270, 315]
+
+
 class Point(BaseModel):
     x: float
     y: float
@@ -102,7 +105,7 @@ class SheetInput(BaseModel):
 
 class NestingParams(BaseModel):
     gap: float = Field(default=0.0, ge=0)
-    rotation: list[Literal[0, 90, 180, 270]] = Field(default_factory=lambda: [0, 180])
+    rotation: list[RotationAngle] = Field(default_factory=lambda: [0, 45, 90, 135, 180, 225, 270, 315])
     objective: str = "maximize_yield"
     debug: bool = False
     source_units: str | None = None

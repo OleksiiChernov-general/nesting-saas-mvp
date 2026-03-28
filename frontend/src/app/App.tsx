@@ -1,21 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiClient, ApiError } from "../api/client";
-import { ConnectionBadge } from "../components/ConnectionBadge";
-import { EmptyState } from "../components/EmptyState";
-import { LogoSVG } from "../components/LogoSVG";
-import { StatusMessage } from "../components/StatusMessage";
-import { MetricsPanel } from "../features/metrics/MetricsPanel";
-import { type NestingFormState, NestingFormPanel } from "../features/nesting/NestingFormPanel";
-import { JobStatusPanel } from "../features/status/JobStatusPanel";
-import { CleanupPanel } from "../features/upload/CleanupPanel";
-import { type UploadedFileItem, UploadPanel } from "../features/upload/UploadPanel";
-import { LayoutViewer } from "../features/viewer/LayoutViewer";
+import { HomePage } from "./HomePage";
+import { type NestingFormState } from "../features/nesting/NestingFormPanel";
+import { type UploadedFileItem } from "../features/upload/UploadPanel";
+import { WorkspacePage } from "./WorkspacePage";
 import type { CleanGeometryResponse, ImportResponse, JobResponse, NestingResultResponse, PolygonPayload } from "../types/api";
 import { parseInteger, parseNonNegativeNumber, parsePositiveNumber } from "../utils/numbers";
 
 const POLLING_INTERVAL_MS = 1500;
 const POLLING_TIMEOUT_MS = 300000;
+const HOME_LANGUAGE_KEY = "nestora-home-language";
+
+type AppPage = "home" | "workspace";
+type HomeLanguage = "en" | "tr" | "uk";
 
 const defaultForm: NestingFormState = {
   nestingMode: "fill_sheet",
@@ -72,6 +70,12 @@ export function App() {
   const pollTimeoutRef = useRef<number | null>(null);
   const pollTokenRef = useRef(0);
 
+  const [page, setPage] = useState<AppPage>(() => (window.location.hash === "#/workspace" ? "workspace" : "home"));
+  const [homeLanguage, setHomeLanguage] = useState<HomeLanguage>(() => {
+    const saved = window.localStorage.getItem(HOME_LANGUAGE_KEY);
+    return saved === "tr" || saved === "uk" ? saved : "en";
+  });
+  const [pendingWorkspaceBrowse, setPendingWorkspaceBrowse] = useState(false);
   const [healthChecking, setHealthChecking] = useState(true);
   const [connected, setConnected] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -127,6 +131,28 @@ export function App() {
     setActiveSheetIndex(0);
     setScaleWarningAcknowledged(false);
   };
+
+  useEffect(() => {
+    const syncPageFromHash = () => {
+      setPage(window.location.hash === "#/workspace" ? "workspace" : "home");
+    };
+
+    window.addEventListener("hashchange", syncPageFromHash);
+    return () => window.removeEventListener("hashchange", syncPageFromHash);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(HOME_LANGUAGE_KEY, homeLanguage);
+  }, [homeLanguage]);
+
+  useEffect(() => {
+    if (page !== "workspace" || !pendingWorkspaceBrowse) return;
+    const timer = window.setTimeout(() => {
+      fileInputRef.current?.click();
+      setPendingWorkspaceBrowse(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [page, pendingWorkspaceBrowse]);
 
   useEffect(() => {
     let active = true;
@@ -450,7 +476,7 @@ export function App() {
         sheet: { sheet_id: "sheet-1", width, height, quantity, units: form.sheetUnits },
         params: {
           gap,
-          rotation: [0, 180],
+          rotation: [0, 45, 90, 135, 180, 225, 270, 315],
           objective: form.objective === "MIN_SHEETS" ? "min_sheets" : "maximize_yield",
           debug: form.debug,
           source_units: importAudit?.detectedUnits.join(", ") ?? null,
@@ -508,141 +534,64 @@ export function App() {
           ? "Step 6: Run another bounded optimization pass to try improving the current result."
           : "Step 6: Review the part list, choose the mode, and run nesting."
         : "Cleanup must succeed before nesting.";
-  const heroStats = [
-    { label: "Uploaded parts", value: `${uploadedFiles.length}` },
-    { label: "Ready geometry", value: `${cleanupReadyParts.length}` },
-    { label: "Layouts", value: `${result?.layouts_used ?? result?.layouts.length ?? 0}` },
-    { label: "Placed parts", value: `${result?.total_parts_placed ?? result?.parts_placed ?? 0}` },
-  ];
+  const goToWorkspace = () => {
+    window.location.hash = "/workspace";
+  };
+
+  const handleHomeUploadClick = () => {
+    setPendingWorkspaceBrowse(true);
+    goToWorkspace();
+  };
+
+  if (page === "home") {
+    return (
+      <HomePage
+        language={homeLanguage}
+        onLanguageChange={setHomeLanguage}
+        onUploadClick={handleHomeUploadClick}
+        onWorkspaceClick={goToWorkspace}
+      />
+    );
+  }
 
   return (
-    <div className="min-h-screen px-4 py-6 text-ink md:px-6 lg:px-8">
-      <div className="mx-auto max-w-[1600px]">
-        <header className="mb-6 overflow-hidden rounded-[2.5rem] border border-[color:var(--border)] bg-[linear-gradient(135deg,rgba(17,24,39,0.96)_0%,rgba(10,12,16,0.98)_55%,rgba(16,185,129,0.08)_100%)] shadow-panel">
-          <div className="grid gap-8 px-6 py-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)] lg:px-8 lg:py-8">
-            <div>
-              <div className="flex items-center gap-4">
-                <LogoSVG className="flex items-center gap-3" />
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-300">Industrial Nesting Platform</p>
-                  <h1 className="mt-2 text-3xl font-semibold tracking-tight text-ink md:text-5xl">Nestora</h1>
-                </div>
-              </div>
-              <p className="mt-5 max-w-3xl text-base leading-7 text-slate-300 md:text-lg">
-                Production-ready 2D nesting for DXF workflows. Import geometry, validate parts, run mixed placement jobs, and review real material metrics in one branded workspace.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-3">
-                <div className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300">
-                  Dark production workspace
-                </div>
-                <div className="rounded-full border border-amber-400/20 bg-amber-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-amber-200">
-                  Mixed nesting ready
-                </div>
-                <div className="rounded-full border border-slate-700 bg-white/[0.03] px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-300">
-                  Backend-driven metrics
-                </div>
-              </div>
-            </div>
-            <div className="rounded-[2rem] border border-[color:var(--border)] bg-black/20 p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-100">Workspace status</div>
-                <ConnectionBadge checking={healthChecking} connected={connected} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                {heroStats.map((item) => (
-                  <div key={item.label} className="rounded-2xl border border-[color:var(--border)] bg-white/[0.03] px-4 py-4">
-                    <div className="text-[11px] uppercase tracking-[0.2em] text-slate-500">{item.label}</div>
-                    <div className="mt-2 text-2xl font-semibold text-white">{item.value}</div>
-                  </div>
-                ))}
-              </div>
-              <button
-                className="mt-4 w-full rounded-full border border-[color:var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:border-accent hover:text-white"
-                onClick={() => resetWorkflow()}
-                type="button"
-              >
-                Reset Workspace
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {!connected && !healthChecking ? (
-          <div className="mb-6">
-            <StatusMessage
-              message="Backend connection failed. Start the API server and verify VITE_API_BASE_URL."
-              tone="error"
-            />
-          </div>
-        ) : null}
-
-        {uploadedFiles.length === 0 ? <EmptyState onBrowseClick={() => fileInputRef.current?.click()} /> : null}
-
-        <div className="mt-6 grid gap-6 xl:grid-cols-[430px_minmax(0,1fr)_350px]">
-          <aside className="space-y-6">
-            <UploadPanel
-              error={uploadError}
-              files={uploadedFiles}
-              inputRef={fileInputRef}
-              loading={uploading}
-              onFilesSelected={handleFilesSelected}
-              statusMessage={uploadStatus}
-            />
-            <CleanupPanel
-              cleanupResult={cleanupResult}
-              error={cleanupError}
-              importResult={importResult}
-              loading={cleanupLoading}
-              onClean={handleClean}
-              statusMessage={cleanupStatus}
-            />
-            <NestingFormPanel
-              cleanupReady={cleanupReadyParts.length > 0}
-              errors={validationErrors}
-              form={form}
-              loading={jobLoading}
-              onChange={handleFormChange}
-              onPartChange={handlePartChange}
-              onRemovePart={handleRemovePart}
-              onScaleWarningAcknowledged={setScaleWarningAcknowledged}
-              onSubmit={handleRunJob}
-              parts={uploadedFiles.map((file) => ({
-                id: file.id,
-                filename: file.name,
-                parsedPolygonCount: file.polygons,
-                cleanedPolygonCount: file.cleanedPolygons.length,
-                units: file.detectedUnits ?? null,
-                quantity: file.quantity,
-                enabled: file.enabled,
-                fillOnly: file.fillOnly,
-                hasGeometry: Boolean(file.nestingPolygon),
-                cleanupIssue: file.cleanupError,
-              }))}
-              scaleWarning={scaleWarning}
-              scaleWarningAcknowledged={scaleWarningAcknowledged}
-              statusMessage={nestingStatus}
-              submitLabel={result ? "Improve Result" : "Run Nesting"}
-            />
-          </aside>
-
-          <main>
-            <LayoutViewer
-              activeSheetIndex={activeSheetIndex}
-              canShowResult={canShowResult}
-              debug={result?.debug ?? null}
-              layouts={result?.layouts ?? []}
-              onSheetChange={setActiveSheetIndex}
-              previewPolygons={previewPolygons}
-            />
-          </main>
-
-          <aside className="space-y-6">
-            <JobStatusPanel disconnected={!connected && !healthChecking} error={jobError} job={job} polling={polling} />
-            <MetricsPanel result={canShowResult ? result : null} />
-          </aside>
-        </div>
-      </div>
-    </div>
+    <WorkspacePage
+      activeSheetIndex={activeSheetIndex}
+      canShowResult={canShowResult}
+      cleanupError={cleanupError}
+      cleanupLoading={cleanupLoading}
+      cleanupReadyPartsCount={cleanupReadyParts.length}
+      cleanupResult={cleanupResult}
+      cleanupStatus={cleanupStatus}
+      connected={connected}
+      fileInputRef={fileInputRef}
+      form={form}
+      handleClean={handleClean}
+      handleFilesSelected={handleFilesSelected}
+      handleFormChange={handleFormChange}
+      handlePartChange={handlePartChange}
+      handleRemovePart={handleRemovePart}
+      handleRunJob={handleRunJob}
+      healthChecking={healthChecking}
+      importResult={importResult}
+      job={job}
+      jobError={jobError}
+      jobLoading={jobLoading}
+      nestingStatus={nestingStatus}
+      polling={polling}
+      previewPolygons={previewPolygons}
+      resetWorkflow={resetWorkflow}
+      result={result}
+      scaleWarning={scaleWarning}
+      scaleWarningAcknowledged={scaleWarningAcknowledged}
+      setActiveSheetIndex={setActiveSheetIndex}
+      setScaleWarningAcknowledged={setScaleWarningAcknowledged}
+      uploadError={uploadError}
+      uploadedFiles={uploadedFiles}
+      uploading={uploading}
+      uploadStatus={uploadStatus}
+      validationErrors={validationErrors}
+    />
   );
 }
 

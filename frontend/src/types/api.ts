@@ -88,7 +88,7 @@ export type NestingJobCreateRequest = {
   previous_job_id?: string | null;
   params: {
     gap: number;
-    rotation: Array<0 | 90 | 180 | 270>;
+    rotation: Array<0 | 45 | 90 | 135 | 180 | 225 | 270 | 315>;
     objective: string;
     debug?: boolean;
     source_units?: string | null;

@@ -89,10 +89,10 @@ def _fits(candidate: Polygon, placed: list[Polygon], sheet: SheetSpec, gap: floa
     sheet_area = box(0, 0, sheet.width, sheet.height)
     if not candidate.within(sheet_area):
         return False
-    candidate_gap = candidate.buffer(gap / 2.0, join_style="mitre")
     for item in placed:
-        item_gap = item.buffer(gap / 2.0, join_style="mitre")
-        if candidate_gap.intersection(item_gap).area > 1e-9:
+        if candidate.intersection(item).area > 1e-9:
+            return False
+        if gap > EPSILON and candidate.distance(item) < gap - EPSILON:
             return False
     return True
 
@@ -629,6 +629,179 @@ def _grid_pack_single_part(
     return best_result
 
 
+def _pattern_pack_single_part(
+    *,
+    part: PartSpec,
+    sheets: list[SheetSpec],
+    rotations: list[int],
+    gap: float,
+    mode: NestingMode,
+    run_number: int,
+    previous_yield: float,
+    enabled_parts: list[PartSpec],
+    active_parts: list[PartSpec],
+    debug_enabled: bool,
+    source_units: str | None,
+    source_max_extent: float | None,
+    deadline: float | None,
+) -> dict | None:
+    oriented_cache: dict[int, Polygon] = {}
+    dimensions: dict[int, tuple[float, float]] = {}
+    for rotation in rotations:
+        _check_deadline(deadline)
+        oriented = _oriented_polygon(part.polygon, rotation)
+        width = float(oriented.bounds[2])
+        height = float(oriented.bounds[3])
+        if width <= EPSILON or height <= EPSILON:
+            continue
+        oriented_cache[rotation] = oriented
+        dimensions[rotation] = (width, height)
+
+    if not oriented_cache:
+        return None
+
+    unique_rotations: list[int] = []
+    unique_oriented: list[Polygon] = []
+    for rotation in oriented_cache:
+        oriented = oriented_cache[rotation]
+        if any(oriented.equals_exact(existing, tolerance=1e-6) for existing in unique_oriented):
+            continue
+        unique_rotations.append(rotation)
+        unique_oriented.append(oriented)
+
+    sequence_patterns = [(rotation,) for rotation in unique_rotations]
+    seen_patterns = set(sequence_patterns)
+    for rotation in unique_rotations:
+        for offset in (180, 90, 45):
+            partner = (rotation + offset) % 360
+            if partner not in unique_rotations or partner == rotation:
+                continue
+            pattern = (rotation, partner)
+            if pattern not in seen_patterns:
+                sequence_patterns.append(pattern)
+                seen_patterns.add(pattern)
+
+    min_width = min(width for width, _ in dimensions.values())
+    min_height = min(height for _, height in dimensions.values())
+    scan_step_x = max(min_width / 4.0, gap, 1.0)
+    scan_step_y = max(min_height / 4.0, gap, 1.0)
+    best_result: dict | None = None
+    best_score = (-1.0, -1.0, -1.0, 0.0)
+
+    for pattern in sequence_patterns:
+        first_width = dimensions[pattern[0]][0]
+        offset_options = [0.0]
+        staggered_offset = (first_width + gap) / 2.0
+        if staggered_offset > EPSILON:
+            offset_options.append(staggered_offset)
+
+        for odd_row_offset in offset_options:
+            _check_deadline(deadline)
+            placed_counts = {item.part_id: 0 for item in enabled_parts}
+            area_contribution = {item.part_id: 0.0 for item in enabled_parts}
+            remaining = {item.part_id: max(item.quantity, 1) for item in enabled_parts}
+            fit_on_empty_sheet = {item.part_id: (item.part_id == part.part_id) for item in enabled_parts}
+            layout_map: dict[tuple[str, int], list[Placement]] = {}
+            stop = False
+
+            for sheet, instance in _sheet_instances(sheets):
+                _check_deadline(deadline)
+                placed_polygons: list[Polygon] = []
+                layout_map.setdefault((sheet.sheet_id, instance), [])
+                y = 0.0
+                row_index = 0
+
+                while y <= sheet.height + EPSILON and not stop:
+                    _check_deadline(deadline)
+                    x = odd_row_offset if row_index % 2 == 1 else 0.0
+                    row_height = 0.0
+                    placed_in_row = False
+                    sequence_index = 0
+
+                    while x <= sheet.width + EPSILON and not stop:
+                        _check_deadline(deadline)
+                        preferred_rotation = pattern[sequence_index % len(pattern)]
+                        trial_rotations = [preferred_rotation] + [rotation for rotation in unique_rotations if rotation != preferred_rotation]
+                        placed_here = False
+
+                        for rotation in trial_rotations:
+                            oriented = oriented_cache[rotation]
+                            part_width, part_height = dimensions[rotation]
+                            if x + part_width > sheet.width + EPSILON or y + part_height > sheet.height + EPSILON:
+                                continue
+                            candidate = affinity.translate(oriented, xoff=x, yoff=y)
+                            if not _fits(candidate, placed_polygons, sheet, gap):
+                                continue
+
+                            placement = Placement(
+                                part_id=part.part_id,
+                                sheet_id=sheet.sheet_id,
+                                instance=placed_counts[part.part_id] + 1,
+                                rotation=rotation,
+                                x=x,
+                                y=y,
+                                polygon=candidate,
+                            )
+                            placed_polygons.append(candidate)
+                            placed_in_row = True
+                            row_height = max(row_height, part_height)
+                            layout_map[(sheet.sheet_id, instance)].append(placement)
+                            placed_counts[part.part_id] += 1
+                            area_contribution[part.part_id] += float(candidate.area)
+                            if mode == "batch_quantity":
+                                remaining[part.part_id] = max(remaining[part.part_id] - 1, 0)
+                                if remaining[part.part_id] == 0:
+                                    stop = True
+                            x = float(candidate.bounds[2]) + gap
+                            sequence_index += 1
+                            placed_here = True
+                            break
+
+                        if not placed_here:
+                            x += scan_step_x
+
+                    if placed_in_row:
+                        y += row_height + gap
+                    else:
+                        y += scan_step_y
+                    row_index += 1
+
+                if stop:
+                    break
+
+            candidate_result = _build_result_from_state(
+                parts=enabled_parts,
+                enabled_parts=enabled_parts,
+                active_parts=active_parts,
+                sheets=sheets,
+                mode=mode,
+                layout_map=layout_map,
+                placed_counts=placed_counts,
+                area_contribution=area_contribution,
+                remaining=remaining,
+                fit_on_empty_sheet=fit_on_empty_sheet,
+                debug_enabled=debug_enabled,
+                source_units=source_units,
+                source_max_extent=source_max_extent,
+                timed_out=False,
+                run_number=run_number,
+                previous_yield=previous_yield,
+            )
+            score = (
+                float(candidate_result.get("yield_ratio", 0.0)),
+                float(candidate_result.get("used_area", 0.0)),
+                float(candidate_result.get("total_parts_placed", 0.0)),
+                -float(candidate_result.get("layouts_used", 0.0)),
+            )
+            if best_result is None or score > best_score:
+                best_result = candidate_result
+                best_score = score
+            if candidate_result.get("yield_ratio", 0.0) >= 0.85:
+                return candidate_result
+
+    return best_result
+
+
 def _build_result_from_state(
     *,
     parts: list[PartSpec],
@@ -774,7 +947,7 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         raise ValueError("Unsupported nesting mode")
 
     gap = float(params.get("gap", 0.0))
-    rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 90, 180, 270}] or [0]
+    rotations = [rotation for rotation in params.get("rotation", [0, 45, 90, 135, 180, 225, 270, 315]) if rotation in {0, 45, 90, 135, 180, 225, 270, 315}] or [0]
     debug_enabled = bool(params.get("debug", False))
     source_units = params.get("source_units")
     source_max_extent = float(params["source_max_extent"]) if params.get("source_max_extent") else None
@@ -849,12 +1022,40 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
                 best_score = grid_score
             if grid_result.get("yield_ratio", 0.0) >= 0.85:
                 return grid_result
+        if mode == "fill_sheet" and len(active_parts) == 1:
+            pattern_result = _pattern_pack_single_part(
+                part=active_parts[0],
+                sheets=sheets,
+                rotations=rotations,
+                gap=gap,
+                mode=mode,
+                run_number=run_number,
+                previous_yield=previous_yield,
+                enabled_parts=enabled_parts,
+                active_parts=active_parts,
+                debug_enabled=debug_enabled,
+                source_units=source_units,
+                source_max_extent=source_max_extent,
+                deadline=deadline,
+            )
+            if pattern_result is not None:
+                pattern_score = (
+                    float(pattern_result.get("yield_ratio", 0.0)),
+                    float(pattern_result.get("used_area", 0.0)),
+                    float(pattern_result.get("total_parts_placed", 0.0)),
+                    -float(pattern_result.get("layouts_used", 0.0)),
+                )
+                if best_result is None or pattern_score > best_score:
+                    best_result = pattern_result
+                    best_score = pattern_score
+                if pattern_result.get("yield_ratio", 0.0) >= 0.85:
+                    return pattern_result
     except SearchTimeout:
         timed_out = True
 
     while time.monotonic() < deadline:
         strategy = strategy_cycle[(run_number + pass_index - 1) % len(strategy_cycle)]
-        lookahead_enabled = pass_index % 2 == 0
+        lookahead_enabled = pass_index % 2 == 0 and len(active_parts) > 1
         remaining: dict[str, int] = {part.part_id: max(part.quantity, 1) for part in enabled_parts}
         placed_counts = {part.part_id: 0 for part in enabled_parts}
         area_contribution = {part.part_id: 0.0 for part in enabled_parts}

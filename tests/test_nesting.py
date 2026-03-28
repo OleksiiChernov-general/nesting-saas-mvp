@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 
 import app.nesting as nesting_module
 from app.nesting import PartSpec, SheetSpec, nest
@@ -365,3 +365,36 @@ def test_fill_sheet_rectangle_heavy_case_no_longer_stalls_at_tiny_yield():
     assert result["status"] == "SUCCEEDED"
     assert result["yield"] >= 0.8
     assert result["parts_placed"] >= 8
+
+
+def test_part_can_fit_only_with_45_degree_rotation():
+    tilted_part = Polygon([(0, 0), (8, 0), (8, 2), (0, 2), (0, 0)])
+    parts = [PartSpec(part_id="tilted", filename="tilted.dxf", polygon=tilted_part, quantity=1)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=7.2, height=7.2, quantity=1)]
+
+    no_rotation_result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield"})
+    rotated_result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0, 45], "objective": "maximize_yield"})
+
+    assert no_rotation_result["parts_placed"] == 0
+    assert rotated_result["parts_placed"] == 1
+    assert rotated_result["layouts"][0]["placements"][0].rotation == 45
+
+
+def test_fill_sheet_triangle_uses_fast_single_part_pattern_packing():
+    parts = [PartSpec(part_id="tri", filename="triangle_50x30x30_mm.dxf", polygon=Polygon([(0, 0), (50, 0), (30, 30), (0, 0)]), quantity=1)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 2.0, "rotation": [0, 45, 90, 135, 180, 225, 270, 315], "objective": "maximize_yield", "time_limit_sec": 3.0})
+
+    assert result["parts_placed"] >= 6
+    assert result["yield"] >= 0.45
+
+
+def test_fill_sheet_circle_uses_fast_single_part_pattern_packing():
+    parts = [PartSpec(part_id="circle", filename="circle_d24_mm.dxf", polygon=Point(12, 12).buffer(12, resolution=24), quantity=1)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 2.0, "rotation": [0, 45, 90, 135, 180, 225, 270, 315], "objective": "maximize_yield", "time_limit_sec": 3.0})
+
+    assert result["parts_placed"] >= 9
+    assert result["yield"] >= 0.4
