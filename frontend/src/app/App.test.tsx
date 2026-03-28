@@ -40,7 +40,7 @@ function buildFetchMock(options?: {
     },
   ];
 
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
     if (url.endsWith("/health")) return jsonResponse({ status: "ok" });
     if (url.endsWith("/v1/files/import")) {
