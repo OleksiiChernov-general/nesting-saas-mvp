@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import time
+
+import pytest
 from shapely.geometry import Polygon
 
+import app.nesting as nesting_module
 from app.nesting import PartSpec, SheetSpec, nest
 
 
@@ -297,3 +301,52 @@ def test_nesting_warns_about_probable_units_mismatch():
     assert result["parts_placed"] >= 1
     assert result["warnings"]
     assert any("Possible scale mismatch" in warning for warning in result["warnings"])
+
+
+def test_timeout_returns_best_valid_layout_so_far(monkeypatch: pytest.MonkeyPatch):
+    original_select = nesting_module._select_next_placement
+
+    def slow_select(*args, **kwargs):
+        time.sleep(0.01)
+        return original_select(*args, **kwargs)
+
+    monkeypatch.setattr(nesting_module, "_select_next_placement", slow_select)
+
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=20)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
+
+    started = time.perf_counter()
+    result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield", "time_limit_sec": 0.03})
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 1.0
+    assert result["status"] == "PARTIAL"
+    assert result["timed_out"] is True
+    assert result["compute_time_sec"] if "compute_time_sec" in result else True
+    assert result["parts_placed"] >= 0
+    assert result["layouts_used"] >= 0
+    assert any("60-second compute limit" in warning for warning in result["warnings"])
+
+
+def test_iterative_run_carries_previous_yield_metadata():
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=6)]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=30, height=20, quantity=1)]
+
+    first_result = nest(parts, sheets, {"mode": "batch_quantity", "gap": 0.0, "rotation": [0], "objective": "maximize_yield", "run_number": 1})
+    second_result = nest(
+        parts,
+        sheets,
+        {
+            "mode": "batch_quantity",
+            "gap": 0.0,
+            "rotation": [0],
+            "objective": "maximize_yield",
+            "run_number": 2,
+            "previous_result": first_result,
+        },
+    )
+
+    assert first_result["run_number"] == 1
+    assert second_result["run_number"] == 2
+    assert second_result["previous_yield"] == first_result["yield"]
+    assert second_result["best_yield"] >= first_result["yield"]

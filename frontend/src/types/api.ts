@@ -85,6 +85,7 @@ export type NestingJobCreateRequest = {
   parts: PartInput[];
   sheet: SheetInput;
   sheets?: SheetInput[];
+  previous_job_id?: string | null;
   params: {
     gap: number;
     rotation: Array<0 | 90 | 180 | 270>;
@@ -97,7 +98,7 @@ export type NestingJobCreateRequest = {
 
 export type JobResponse = {
   id: string;
-  state: "CREATED" | "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  state: "CREATED" | "QUEUED" | "RUNNING" | "PARTIAL" | "SUCCEEDED" | "FAILED" | "CANCELLED";
   progress: number;
   status_message?: string | null;
   error?: string | null;
@@ -120,6 +121,12 @@ export type JobResponse = {
   started_at?: string | null;
   heartbeat_at?: string | null;
   finished_at?: string | null;
+  run_number?: number;
+  compute_time_sec?: number;
+  current_yield?: number;
+  previous_yield?: number;
+  best_yield?: number;
+  improvement_percent?: number;
 };
 
 export type PlacementResponse = {
@@ -191,6 +198,7 @@ export type NestingDebugResponse = {
 };
 
 export type NestingResultResponse = {
+  status?: "SUCCEEDED" | "PARTIAL" | "FAILED";
   mode?: "fill_sheet" | "batch_quantity";
   summary: {
     total_parts: number;
@@ -218,4 +226,19 @@ export type NestingResultResponse = {
   unplaced_parts: string[];
   warnings?: string[];
   debug?: NestingDebugResponse | null;
+  job_id?: string | null;
+  run_number?: number;
+  compute_time_sec?: number;
+  previous_yield?: number;
+  best_yield?: number;
+  improvement_percent?: number;
+  timed_out?: boolean;
+  optimization_history?: Array<{
+    job_id: string;
+    run_number: number;
+    status: string;
+    yield: number;
+    compute_time_sec: number;
+    improvement_percent: number;
+  }>;
 };

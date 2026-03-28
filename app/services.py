@@ -67,8 +67,24 @@ def clean_geometry_payload(payload: CleanGeometryRequest) -> CleanGeometryRespon
 
 
 def create_job_record(db: Session, payload: NestingJobCreateRequest) -> NestingJob:
+    payload_data = payload.model_dump(mode="json")
+    previous_yield = 0.0
+    best_yield = 0.0
+    run_number = 1
+
+    if payload.previous_job_id:
+        previous_job = db.get(NestingJob, payload.previous_job_id)
+        previous_result = _load_job_result_if_available(previous_job) if previous_job else None
+        if previous_result:
+            previous_yield = float(previous_result.get("yield_ratio") or previous_result.get("yield") or 0.0)
+            best_yield = float(previous_result.get("best_yield") or previous_yield)
+            run_number = int(previous_result.get("run_number") or 1) + 1
+
+    payload_data["run_number"] = run_number
+    payload_data["previous_yield"] = previous_yield
+    payload_data["best_yield"] = best_yield
     job = NestingJob(
-        payload=payload.model_dump(mode="json"),
+        payload=payload_data,
         state=JobState.CREATED,
         progress=0.0,
         status_message="Job created.",
@@ -129,9 +145,49 @@ def _build_job_progress_parts(job: NestingJob) -> tuple[str | None, dict | None,
     return mode, {"total_parts": len(enabled_parts)}, progress_parts
 
 
+def _load_job_result_if_available(job: NestingJob) -> dict | None:
+    if not job.result_path:
+        return None
+    try:
+        result = load_job_result(Path(job.result_path))
+    except FileNotFoundError:
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _calculate_improvement_percent(current_yield: float, previous_yield: float) -> float:
+    if previous_yield <= 0:
+        return 0.0
+    return ((current_yield - previous_yield) / previous_yield) * 100.0
+
+
+def _job_runtime_metrics(job: NestingJob) -> dict[str, float | int]:
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    result = _load_job_result_if_available(job)
+    if result:
+        return {
+            "run_number": int(result.get("run_number") or payload.get("run_number") or 1),
+            "compute_time_sec": float(result.get("compute_time_sec") or result.get("duration_seconds") or 0.0),
+            "current_yield": float(result.get("yield_ratio") or result.get("yield") or 0.0),
+            "previous_yield": float(result.get("previous_yield") or 0.0),
+            "best_yield": float(result.get("best_yield") or result.get("yield_ratio") or result.get("yield") or 0.0),
+            "improvement_percent": float(result.get("improvement_percent") or 0.0),
+        }
+
+    return {
+        "run_number": int(payload.get("run_number") or 1),
+        "compute_time_sec": 0.0,
+        "current_yield": 0.0,
+        "previous_yield": float(payload.get("previous_yield") or 0.0),
+        "best_yield": float(payload.get("best_yield") or 0.0),
+        "improvement_percent": 0.0,
+    }
+
+
 def serialize_job(job: NestingJob) -> dict:
     artifact_url = f"/v1/nesting/jobs/{job.id}/artifact" if job.artifact_path else None
     mode, summary, parts = _build_job_progress_parts(job)
+    runtime = _job_runtime_metrics(job)
     return {
         "id": job.id,
         "state": job.state,
@@ -147,6 +203,12 @@ def serialize_job(job: NestingJob) -> dict:
         "started_at": job.started_at.isoformat() if job.started_at else None,
         "heartbeat_at": job.heartbeat_at.isoformat() if job.heartbeat_at else None,
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "run_number": runtime["run_number"],
+        "compute_time_sec": runtime["compute_time_sec"],
+        "current_yield": runtime["current_yield"],
+        "previous_yield": runtime["previous_yield"],
+        "best_yield": runtime["best_yield"],
+        "improvement_percent": runtime["improvement_percent"],
     }
 
 
@@ -212,6 +274,7 @@ def recover_stale_jobs() -> None:
 
 def run_nesting_job(db: Session, job: NestingJob) -> dict:
     payload = NestingJobCreateRequest.model_validate(job.payload)
+    settings = get_settings()
     job.state = JobState.RUNNING
     job.error = None
     job.progress = 0.15
@@ -228,7 +291,6 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
             update_job_status(
                 job.id,
                 state=JobState.RUNNING,
-                progress=max(float(job.progress or 0.0), 0.25),
                 status_message="Nesting job is still running.",
             )
 
@@ -252,14 +314,62 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
             SheetSpec(sheet_id=sheet.sheet_id, width=sheet.width, height=sheet.height, quantity=sheet.quantity)
             for sheet in payload.sheets
         ]
-        update_job_status(job.id, state=JobState.RUNNING, progress=0.55, status_message="Computing nesting layout.")
+        previous_result: dict | None = None
+        if payload.previous_job_id:
+            previous_job = db.get(NestingJob, payload.previous_job_id)
+            previous_result = _load_job_result_if_available(previous_job) if previous_job else None
+
+        update_job_status(job.id, state=JobState.RUNNING, progress=0.55, status_message="Computing nesting layout within 60-second limit.")
         started = time.perf_counter()
-        result = nest(parts, sheets, {**payload.params.model_dump(), "mode": payload.mode})
-        duration_seconds = round(time.perf_counter() - started, 3)
+        progress_floor = 0.55
+
+        def report_engine_progress(fraction: float, message: str) -> None:
+            clamped = min(max(fraction, 0.0), 1.0)
+            update_job_status(
+                job.id,
+                state=JobState.RUNNING,
+                progress=min(0.95, progress_floor + (clamped * 0.4)),
+                status_message=message,
+            )
+
+        result = nest(
+            parts,
+            sheets,
+            {
+                **payload.params.model_dump(),
+                "mode": payload.mode,
+                "time_limit_sec": settings.max_compute_seconds,
+                "run_number": int((job.payload or {}).get("run_number", 1)),
+                "previous_result": previous_result,
+                "progress_callback": report_engine_progress,
+            },
+        )
+        duration_seconds = round(min(time.perf_counter() - started, settings.max_compute_seconds), 3)
+        current_yield = float(result.get("yield_ratio") or result.get("yield") or 0.0)
+        previous_yield = float((job.payload or {}).get("previous_yield") or 0.0)
+        best_yield = max(float((job.payload or {}).get("best_yield") or 0.0), current_yield)
+        improvement_percent = _calculate_improvement_percent(current_yield, previous_yield)
+        optimization_history = list(previous_result.get("optimization_history", [])) if previous_result else []
+        optimization_history.append(
+            {
+                "job_id": str(job.id),
+                "run_number": int((job.payload or {}).get("run_number", 1)),
+                "status": result.get("status", "FAILED"),
+                "yield": current_yield,
+                "compute_time_sec": duration_seconds,
+                "improvement_percent": improvement_percent,
+            }
+        )
         serializable = {
             **result,
             "job_id": str(job.id),
             "duration_seconds": duration_seconds,
+            "compute_time_sec": duration_seconds,
+            "run_number": int((job.payload or {}).get("run_number", 1)),
+            "previous_yield": previous_yield,
+            "best_yield": best_yield,
+            "improvement_percent": improvement_percent,
+            "optimization_history": optimization_history,
             "layouts": [
                 {
                     **layout,
@@ -287,16 +397,21 @@ def run_nesting_job(db: Session, job: NestingJob) -> dict:
         }
         result_path = save_job_result(job.id, serializable)
         artifact_path = str(result_path)
-        job.state = JobState.SUCCEEDED
+        final_status = str(result.get("status") or "FAILED")
+        job.state = JobState.PARTIAL if final_status == "PARTIAL" else JobState.SUCCEEDED
         job.result_path = str(result_path)
         job.artifact_path = artifact_path
         job.progress = 1.0
-        job.status_message = f"Job finished successfully in {duration_seconds:.3f}s."
+        job.status_message = (
+            f"Job finished successfully in {duration_seconds:.3f}s."
+            if job.state == JobState.SUCCEEDED
+            else f"Job returned the best-so-far partial result in {duration_seconds:.3f}s."
+        )
         job.finished_at = utcnow()
         job.heartbeat_at = job.finished_at
         db.add(job)
         db.commit()
-        logger.info("Job %s finished in %.3fs", job.id, duration_seconds)
+        logger.info("Job %s finished with state=%s in %.3fs", job.id, job.state, duration_seconds)
         return serializable
     except Exception as exc:
         job.state = JobState.FAILED

@@ -329,11 +329,36 @@ def test_batch_quantity_partial_fit_integration_reports_remaining(client, sample
     assert result_response.status_code == 200
     body = result_response.json()
     assert body["mode"] == "batch_quantity"
+    assert body["status"] == "PARTIAL"
     assert body["parts"][0]["requested_quantity"] == 5
     assert body["parts"][0]["placed_quantity"] == 4
     assert body["parts"][0]["remaining_quantity"] == 1
     assert body["unplaced_parts"] == ["panel"]
     assert any("remaining quantity stays above zero" in warning for warning in body["warnings"])
+
+
+def test_improvement_run_increments_run_number_and_keeps_history(client, sample_job_payload):
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    first_job_id = create_response.json()["id"]
+    assert process_next_job(timeout=1) is True
+
+    first_result = client.get(f"/v1/nesting/jobs/{first_job_id}/result").json()
+
+    improvement_payload = dict(sample_job_payload)
+    improvement_payload["previous_job_id"] = first_job_id
+    second_create_response = client.post("/v1/nesting/jobs", json=improvement_payload)
+    second_job_id = second_create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    second_status = client.get(f"/v1/nesting/jobs/{second_job_id}").json()
+    second_result = client.get(f"/v1/nesting/jobs/{second_job_id}/result").json()
+
+    assert second_status["run_number"] == 2
+    assert second_result["run_number"] == 2
+    assert second_result["previous_yield"] == first_result["yield"]
+    assert second_result["best_yield"] >= first_result["yield"]
+    assert len(second_result["optimization_history"]) >= 1
 
 
 def test_batch_quantity_multi_part_integration_handles_requested_counts_and_partial_fit(client, sample_job_payload):

@@ -40,6 +40,7 @@ type NestingFormPanelProps = {
   onRemovePart: (partId: string) => void;
   onScaleWarningAcknowledged: (acknowledged: boolean) => void;
   onSubmit: () => void;
+  submitLabel?: string;
 };
 
 const inputClassName =
@@ -59,6 +60,7 @@ export function NestingFormPanel({
   onRemovePart,
   onScaleWarningAcknowledged,
   onSubmit,
+  submitLabel = "Run Nesting",
 }: NestingFormPanelProps) {
   return (
     <Panel title="Production Nesting" subtitle="Build a real nesting job with one or more parts, a clear production mode, and explicit quantities.">
@@ -226,7 +228,7 @@ export function NestingFormPanel({
         onClick={onSubmit}
         type="button"
       >
-        {loading ? "Creating Job..." : "Run Nesting"}
+        {loading ? "Creating Job..." : submitLabel}
       </button>
       <StatusMessage message={statusMessage} tone={cleanupReady ? "neutral" : "warning"} />
       {!cleanupReady ? (

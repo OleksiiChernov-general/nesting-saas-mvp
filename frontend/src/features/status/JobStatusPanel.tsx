@@ -12,6 +12,7 @@ const stateTone: Record<string, string> = {
   CREATED: "bg-slate-800 text-slate-200",
   QUEUED: "bg-sky-500/15 text-sky-300",
   RUNNING: "bg-amber-500/15 text-amber-300",
+  PARTIAL: "bg-amber-500/15 text-amber-300",
   SUCCEEDED: "bg-emerald-500/15 text-emerald-300",
   FAILED: "bg-rose-500/15 text-rose-300",
   CANCELLED: "bg-slate-700 text-slate-300",
@@ -58,7 +59,15 @@ export function JobStatusPanel({ job, polling, error, disconnected }: JobStatusP
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             {job.mode ? <span>Mode: <strong>{job.mode === "fill_sheet" ? "Fill Sheet" : "Batch Quantity"}</strong></span> : null}
             {job.summary ? <span>Parts in job: <strong>{job.summary.total_parts}</strong></span> : null}
+            {typeof job.run_number === "number" ? <span>Run: <strong>{job.run_number}</strong></span> : null}
+            {typeof job.compute_time_sec === "number" && job.compute_time_sec > 0 ? <span>Compute: <strong>{job.compute_time_sec.toFixed(2)}s</strong></span> : null}
+            {typeof job.current_yield === "number" && job.current_yield > 0 ? <span>Yield: <strong>{(job.current_yield * 100).toFixed(2)}%</strong></span> : null}
           </div>
+        </div>
+      ) : null}
+      {typeof job?.improvement_percent === "number" && job.improvement_percent !== 0 ? (
+        <div className={`rounded-2xl border px-4 py-3 text-sm ${job.improvement_percent > 0 ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-[color:var(--border)] bg-black/15 text-slate-300"}`}>
+          Improved by {job.improvement_percent.toFixed(2)}% vs previous run
         </div>
       ) : null}
       {job?.artifact_url ? (

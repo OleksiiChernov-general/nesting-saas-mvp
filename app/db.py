@@ -77,6 +77,7 @@ def _migrate_existing_schema() -> None:
         statements.extend(
             [
                 "ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'QUEUED'",
+                "ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'PARTIAL'",
                 "ALTER TYPE job_state ADD VALUE IF NOT EXISTS 'CANCELLED'",
             ]
         )

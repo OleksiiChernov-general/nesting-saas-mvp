@@ -115,6 +115,7 @@ class NestingJobCreateRequest(BaseModel):
     sheet: SheetInput | None = None
     sheets: list[SheetInput] = Field(default_factory=list)
     params: NestingParams = Field(default_factory=NestingParams)
+    previous_job_id: UUID | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -173,6 +174,12 @@ class JobResponse(BaseModel):
     started_at: str | None = None
     heartbeat_at: str | None = None
     finished_at: str | None = None
+    run_number: int = 1
+    compute_time_sec: float = 0.0
+    current_yield: float = 0.0
+    previous_yield: float = 0.0
+    best_yield: float = 0.0
+    improvement_percent: float = 0.0
 
 
 class PlacementResponse(BaseModel):
@@ -245,6 +252,7 @@ class NestingDebugResponse(BaseModel):
 
 class NestingResultResponse(BaseModel):
     mode: Literal["fill_sheet", "batch_quantity"] = "batch_quantity"
+    status: Literal["SUCCEEDED", "PARTIAL", "FAILED"] = "FAILED"
     summary: NestingPartsSummaryResponse
     yield_value: float = Field(alias="yield")
     yield_ratio: float | None = None
@@ -260,5 +268,13 @@ class NestingResultResponse(BaseModel):
     unplaced_parts: list[str]
     warnings: list[str] = Field(default_factory=list)
     debug: NestingDebugResponse | None = None
+    job_id: UUID | None = None
+    run_number: int = 1
+    compute_time_sec: float = 0.0
+    previous_yield: float = 0.0
+    best_yield: float = 0.0
+    improvement_percent: float = 0.0
+    timed_out: bool = False
+    optimization_history: list[dict] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}

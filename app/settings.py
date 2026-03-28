@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     worker_idle_sleep_seconds: float = 0.5
     job_heartbeat_interval_seconds: float = 2.0
     stale_job_timeout_seconds: int = 900
+    max_compute_seconds: float = 60.0
 
     model_config = SettingsConfigDict(
         env_prefix="NESTING_",

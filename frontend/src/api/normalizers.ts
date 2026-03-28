@@ -141,7 +141,7 @@ export function normalizeJobResponse(value: unknown): JobResponse {
       : null;
   return {
     id: toStringValue(record?.id),
-    state: ["CREATED", "QUEUED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"].includes(state)
+    state: ["CREATED", "QUEUED", "RUNNING", "PARTIAL", "SUCCEEDED", "FAILED", "CANCELLED"].includes(state)
       ? (state as JobResponse["state"])
       : "FAILED",
     progress: toNumber(record?.progress),
@@ -177,6 +177,12 @@ export function normalizeJobResponse(value: unknown): JobResponse {
     started_at: typeof record?.started_at === "string" ? record.started_at : null,
     heartbeat_at: typeof record?.heartbeat_at === "string" ? record.heartbeat_at : null,
     finished_at: typeof record?.finished_at === "string" ? record.finished_at : null,
+    run_number: toNumber(record?.run_number, 1),
+    compute_time_sec: toNumber(record?.compute_time_sec),
+    current_yield: toNumber(record?.current_yield),
+    previous_yield: toNumber(record?.previous_yield),
+    best_yield: toNumber(record?.best_yield),
+    improvement_percent: toNumber(record?.improvement_percent),
   };
 }
 
@@ -278,6 +284,10 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
         ? toNumber(record?.scrap_area) / toNumber(record?.total_sheet_area)
         : 0;
   return {
+    status:
+      record?.status === "SUCCEEDED" || record?.status === "PARTIAL" || record?.status === "FAILED"
+        ? (record.status as NestingResultResponse["status"])
+        : "FAILED",
     mode:
       record?.mode === "fill_sheet" || record?.mode === "batch_quantity"
         ? (record.mode as NestingResultResponse["mode"])
@@ -324,6 +334,26 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
       : [],
     warnings: Array.isArray(record?.warnings)
       ? record.warnings.map((item, index) => toStringValue(item, `warning-${index + 1}`))
+      : [],
+    job_id: typeof record?.job_id === "string" ? record.job_id : null,
+    run_number: toNumber(record?.run_number, 1),
+    compute_time_sec: toNumber(record?.compute_time_sec),
+    previous_yield: toNumber(record?.previous_yield),
+    best_yield: toNumber(record?.best_yield),
+    improvement_percent: toNumber(record?.improvement_percent),
+    timed_out: Boolean(record?.timed_out),
+    optimization_history: Array.isArray(record?.optimization_history)
+      ? record.optimization_history.map((item, index) => {
+          const entry = item as Record<string, unknown> | null;
+          return {
+            job_id: toStringValue(entry?.job_id, `job-${index + 1}`),
+            run_number: toNumber(entry?.run_number, index + 1),
+            status: toStringValue(entry?.status, "FAILED"),
+            yield: toNumber(entry?.yield),
+            compute_time_sec: toNumber(entry?.compute_time_sec),
+            improvement_percent: toNumber(entry?.improvement_percent),
+          };
+        })
       : [],
     debug:
       record?.debug && typeof record.debug === "object"

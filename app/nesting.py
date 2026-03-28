@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Literal
 
 from shapely import affinity
@@ -8,6 +9,10 @@ from shapely.geometry import Polygon, box
 
 EPSILON = 1e-6
 NestingMode = Literal["fill_sheet", "batch_quantity"]
+
+
+class SearchTimeout(RuntimeError):
+    pass
 
 
 @dataclass
@@ -79,6 +84,11 @@ def _fits(candidate: Polygon, placed: list[Polygon], sheet: SheetSpec, gap: floa
         if candidate_gap.intersection(item_gap).area > 1e-9:
             return False
     return True
+
+
+def _check_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise SearchTimeout("Nesting compute time limit reached")
 
 
 def _validate_layout_metrics(layouts: list[dict], total_sheet_area: float, used_area: float, scrap_area: float, yield_value: float) -> dict:
@@ -192,12 +202,32 @@ def _validate_layout_metrics(layouts: list[dict], total_sheet_area: float, used_
     }
 
 
-def _candidate_parts(parts: list[PartSpec], mode: NestingMode, remaining: dict[str, int]) -> list[PartSpec]:
+def _candidate_parts(
+    parts: list[PartSpec],
+    mode: NestingMode,
+    remaining: dict[str, int],
+    *,
+    strategy: str = "area_desc",
+    seed_priority: dict[str, int] | None = None,
+) -> list[PartSpec]:
     candidates = [part for part in parts if part.enabled and (mode == "fill_sheet" or remaining[part.part_id] > 0)]
     solo_parts = [part for part in candidates if part.fill_only]
     if mode == "fill_sheet" and solo_parts:
         candidates = solo_parts
-    return sorted(candidates, key=lambda item: (-round(item.polygon.area, 6), item.filename or item.part_id, item.part_id))
+    priority = seed_priority or {}
+
+    if strategy == "area_asc":
+        key_fn = lambda item: (round(item.polygon.area, 6), priority.get(item.part_id, 10_000), item.filename or item.part_id, item.part_id)
+    elif strategy == "filename":
+        key_fn = lambda item: (priority.get(item.part_id, 10_000), item.filename or item.part_id, -round(item.polygon.area, 6), item.part_id)
+    elif strategy == "remaining_desc":
+        key_fn = lambda item: (-remaining.get(item.part_id, 0), priority.get(item.part_id, 10_000), -round(item.polygon.area, 6), item.part_id)
+    elif strategy == "seeded":
+        key_fn = lambda item: (priority.get(item.part_id, 10_000), -remaining.get(item.part_id, 0), -round(item.polygon.area, 6), item.part_id)
+    else:
+        key_fn = lambda item: (priority.get(item.part_id, 10_000), -round(item.polygon.area, 6), item.filename or item.part_id, item.part_id)
+
+    return sorted(candidates, key=key_fn)
 
 
 def _is_nestable_part(part: PartSpec) -> bool:
@@ -278,6 +308,10 @@ def _placement_score(
     rotations: list[int],
     mode: NestingMode,
     remaining: dict[str, int],
+    strategy: str,
+    seed_priority: dict[str, int] | None,
+    deadline: float | None,
+    lookahead_enabled: bool,
 ) -> tuple[float, float, int, float, float, float]:
     min_x, min_y, max_x, max_y = candidate.bounds
     contact_score = _contact_score(candidate, placed_polygons, sheet, gap)
@@ -286,14 +320,21 @@ def _placement_score(
     future_remaining = dict(remaining)
     if mode == "batch_quantity":
         future_remaining[part.part_id] = max(future_remaining.get(part.part_id, 0) - 1, 0)
-    future_score = _future_productive_area(
-        parts=parts,
-        sheet=sheet,
-        placed_polygons=placed_polygons + [candidate],
-        rotations=rotations,
-        gap=gap,
-        mode=mode,
-        remaining=future_remaining,
+    future_score = (
+        _future_productive_area(
+            parts=parts,
+            sheet=sheet,
+            placed_polygons=placed_polygons + [candidate],
+            rotations=rotations,
+            gap=gap,
+            mode=mode,
+            remaining=future_remaining,
+            strategy=strategy,
+            seed_priority=seed_priority,
+            deadline=deadline,
+        )
+        if lookahead_enabled
+        else 0.0
     )
     return (
         primary_score + (future_score * 0.35),
@@ -314,9 +355,13 @@ def _future_productive_area(
     gap: float,
     mode: NestingMode,
     remaining: dict[str, int],
+    strategy: str,
+    seed_priority: dict[str, int] | None,
+    deadline: float | None,
 ) -> float:
     best_area = 0.0
-    for part in _candidate_parts(parts, mode, remaining):
+    for part in _candidate_parts(parts, mode, remaining, strategy=strategy, seed_priority=seed_priority):
+        _check_deadline(deadline)
         part_area = float(part.polygon.area)
         for rotation in rotations:
             oriented = _oriented_polygon(part.polygon, rotation)
@@ -355,10 +400,15 @@ def _best_placement_for_part(
     gap: float,
     mode: NestingMode,
     remaining: dict[str, int],
+    strategy: str,
+    seed_priority: dict[str, int] | None,
+    deadline: float | None,
+    lookahead_enabled: bool,
 ) -> tuple[Placement, tuple[float, float, int, float, float, float]] | None:
     best_match: tuple[Placement, tuple[float, float, int, float, float, float]] | None = None
 
     for rotation in rotations:
+        _check_deadline(deadline)
         oriented = _oriented_polygon(part.polygon, rotation)
         part_width = oriented.bounds[2]
         part_height = oriented.bounds[3]
@@ -394,6 +444,10 @@ def _best_placement_for_part(
                     rotations=rotations,
                     mode=mode,
                     remaining=remaining,
+                    strategy=strategy,
+                    seed_priority=seed_priority,
+                    deadline=deadline,
+                    lookahead_enabled=lookahead_enabled,
                 )
                 if best_match is None or score > best_match[1]:
                     best_match = (placement, score)
@@ -411,10 +465,15 @@ def _select_next_placement(
     gap: float,
     mode: NestingMode,
     remaining: dict[str, int],
+    strategy: str,
+    seed_priority: dict[str, int] | None,
+    deadline: float | None,
+    lookahead_enabled: bool,
 ) -> Placement | None:
     best_choice: tuple[Placement, tuple[float, float, int, float, float, float], tuple[float, float, str]] | None = None
 
-    for part in _candidate_parts(parts, mode, remaining):
+    for part in _candidate_parts(parts, mode, remaining, strategy=strategy, seed_priority=seed_priority):
+        _check_deadline(deadline)
         match = _best_placement_for_part(
             parts=parts,
             part=part,
@@ -425,6 +484,10 @@ def _select_next_placement(
             gap=gap,
             mode=mode,
             remaining=remaining,
+            strategy=strategy,
+            seed_priority=seed_priority,
+            deadline=deadline,
+            lookahead_enabled=lookahead_enabled,
         )
         if match is None:
             continue
@@ -437,10 +500,11 @@ def _select_next_placement(
     return best_choice[0] if best_choice else None
 
 
-def _part_can_fit_empty_sheet(part: PartSpec, sheets: list[SheetSpec], rotations: list[int], gap: float) -> bool:
+def _part_can_fit_empty_sheet(part: PartSpec, sheets: list[SheetSpec], rotations: list[int], gap: float, deadline: float | None = None) -> bool:
     if not _is_nestable_part(part):
         return False
     for sheet in sheets:
+        _check_deadline(deadline)
         match = _best_placement_for_part(
             parts=[part],
             part=part,
@@ -451,63 +515,35 @@ def _part_can_fit_empty_sheet(part: PartSpec, sheets: list[SheetSpec], rotations
             gap=gap,
             mode="batch_quantity",
             remaining={part.part_id: 1},
+            strategy="area_desc",
+            seed_priority=None,
+            deadline=deadline,
+            lookahead_enabled=False,
         )
         if match is not None:
             return True
     return False
 
 
-def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
-    mode = params.get("mode", "batch_quantity")
-    if mode not in {"fill_sheet", "batch_quantity"}:
-        raise ValueError("Unsupported nesting mode")
-
-    gap = float(params.get("gap", 0.0))
-    rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 90, 180, 270}] or [0]
-    debug_enabled = bool(params.get("debug", False))
-    source_units = params.get("source_units")
-    source_max_extent = float(params["source_max_extent"]) if params.get("source_max_extent") else None
-
-    enabled_parts = [part for part in parts if part.enabled]
-    if not enabled_parts:
-        raise ValueError("At least one enabled part is required")
-    active_parts = [part for part in enabled_parts if _is_nestable_part(part)]
-
-    remaining: dict[str, int] = {part.part_id: max(part.quantity, 1) for part in enabled_parts}
-    placed_counts = {part.part_id: 0 for part in enabled_parts}
-    area_contribution = {part.part_id: 0.0 for part in enabled_parts}
-    fit_on_empty_sheet = {part.part_id: _part_can_fit_empty_sheet(part, sheets, rotations, gap) for part in enabled_parts}
-
-    layout_map: dict[tuple[str, int], list[Placement]] = {}
-    geometry_map: dict[tuple[str, int], list[Polygon]] = {}
-
-    stop_filling = False
-    for sheet, instance in _sheet_instances(sheets):
-        placed_polygons = geometry_map.setdefault((sheet.sheet_id, instance), [])
-        while not stop_filling:
-            placement = _select_next_placement(
-                parts=active_parts,
-                sheet=sheet,
-                placed_polygons=placed_polygons,
-                placed_counts=placed_counts,
-                rotations=rotations,
-                gap=gap,
-                mode=mode,
-                remaining=remaining,
-            )
-            if not placement:
-                break
-            layout_map.setdefault((sheet.sheet_id, instance), []).append(placement)
-            placed_polygons.append(placement.polygon)
-            placed_counts[placement.part_id] += 1
-            area_contribution[placement.part_id] += float(placement.polygon.area)
-            if mode == "batch_quantity":
-                remaining[placement.part_id] = max(remaining[placement.part_id] - 1, 0)
-                if all(value == 0 for value in remaining.values()):
-                    stop_filling = True
-        if stop_filling:
-            break
-
+def _build_result_from_state(
+    *,
+    parts: list[PartSpec],
+    enabled_parts: list[PartSpec],
+    active_parts: list[PartSpec],
+    sheets: list[SheetSpec],
+    mode: NestingMode,
+    layout_map: dict[tuple[str, int], list[Placement]],
+    placed_counts: dict[str, int],
+    area_contribution: dict[str, float],
+    remaining: dict[str, int],
+    fit_on_empty_sheet: dict[str, bool],
+    debug_enabled: bool,
+    source_units: str | None,
+    source_max_extent: float | None,
+    timed_out: bool,
+    run_number: int,
+    previous_yield: float,
+) -> dict:
     layouts = []
     total_sheet_area = 0.0
     used_area = 0.0
@@ -541,10 +577,7 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         layout["placements"].sort(key=lambda item: (item.y, item.x, item.part_id, item.instance))
     debug_summary = _validate_layout_metrics(layouts, total_sheet_area, used_area, scrap_area, yield_value)
 
-    parts_summary = {
-        "total_parts": len(enabled_parts),
-    }
-
+    parts_summary = {"total_parts": len(enabled_parts)}
     part_results = [
         {
             "part_id": part.part_id,
@@ -559,10 +592,7 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     ]
     part_results.sort(key=lambda item: (item["filename"] or item["part_id"], item["part_id"]))
 
-    unplaced = sorted(
-        [part_id for part_id, count in remaining.items() if count > 0]
-    ) if mode == "batch_quantity" else []
-
+    unplaced = sorted([part_id for part_id, count in remaining.items() if count > 0]) if mode == "batch_quantity" else []
     warnings: list[str] = []
     max_sheet_extent = max((max(sheet.width, sheet.height) for sheet in sheets), default=0.0)
     if source_units in {"Inches", "Feet", "Yards", "Unitless", None} and source_max_extent and max_sheet_extent:
@@ -575,6 +605,8 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     if mode == "fill_sheet" and parts_placed <= 1:
         if len(active_parts) >= 1 and any(p.polygon.area * 4 <= sheet.width * sheet.height for p in active_parts for sheet in sheets):
             warnings.append("Fill Sheet mode only placed one part. Check part size, sheet size, and valid geometry. This may indicate a scale mismatch or unusually large parts.")
+    if timed_out:
+        warnings.append("Optimization stopped at the 60-second compute limit and returned the best valid layout found so far.")
     for part in enabled_parts:
         requested_quantity = max(part.quantity, 1)
         placed_quantity = placed_counts[part.part_id]
@@ -598,7 +630,14 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
                 f"Part {part.filename or part.part_id} was enabled for Fill Sheet, but no feasible placement remained once the sheet was packed."
             )
 
+    status = "SUCCEEDED"
+    if timed_out or (mode == "batch_quantity" and any(value > 0 for value in remaining.values())):
+        status = "PARTIAL"
+    if parts_placed == 0 and any(not fit_on_empty_sheet[part.part_id] for part in enabled_parts):
+        status = "PARTIAL"
+
     result = {
+        "status": status,
         "mode": mode,
         "summary": parts_summary,
         "yield": yield_value,
@@ -614,7 +653,170 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
         "parts": part_results,
         "unplaced_parts": unplaced,
         "warnings": warnings,
+        "run_number": run_number,
+        "previous_yield": previous_yield,
+        "best_yield": max(previous_yield, yield_value),
+        "improvement_percent": 0.0,
+        "timed_out": timed_out,
     }
     if debug_enabled:
         result["debug"] = debug_summary
     return result
+
+
+def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
+    mode = params.get("mode", "batch_quantity")
+    if mode not in {"fill_sheet", "batch_quantity"}:
+        raise ValueError("Unsupported nesting mode")
+
+    gap = float(params.get("gap", 0.0))
+    rotations = [rotation for rotation in params.get("rotation", [0, 180]) if rotation in {0, 90, 180, 270}] or [0]
+    debug_enabled = bool(params.get("debug", False))
+    source_units = params.get("source_units")
+    source_max_extent = float(params["source_max_extent"]) if params.get("source_max_extent") else None
+    time_limit_sec = max(float(params.get("time_limit_sec", 60.0)), 0.01)
+    deadline = time.monotonic() + time_limit_sec
+    run_number = max(int(params.get("run_number", 1)), 1)
+    previous_result = params.get("previous_result") if isinstance(params.get("previous_result"), dict) else None
+    previous_yield = float(previous_result.get("yield_ratio") or previous_result.get("yield") or 0.0) if previous_result else 0.0
+    progress_callback = params.get("progress_callback") if callable(params.get("progress_callback")) else None
+    seed_priority = (
+        {
+            str(item.get("part_id")): index
+            for index, item in enumerate(
+                sorted(
+                    previous_result.get("parts", []),
+                    key=lambda value: (
+                        -float(value.get("area_contribution", 0.0)),
+                        -float(value.get("placed_quantity", 0.0)),
+                        str(value.get("part_id", "")),
+                    ),
+                )
+            )
+        }
+        if previous_result
+        else {}
+    )
+
+    enabled_parts = [part for part in parts if part.enabled]
+    if not enabled_parts:
+        raise ValueError("At least one enabled part is required")
+    active_parts = [part for part in enabled_parts if _is_nestable_part(part)]
+
+    fit_on_empty_sheet: dict[str, bool] = {}
+    for part in enabled_parts:
+        try:
+            fit_on_empty_sheet[part.part_id] = _part_can_fit_empty_sheet(part, sheets, rotations, gap, deadline)
+        except SearchTimeout:
+            fit_on_empty_sheet[part.part_id] = False
+    strategy_cycle = ["area_desc", "remaining_desc", "seeded", "filename", "area_asc"]
+    best_result: dict | None = None
+    best_score = (-1.0, -1.0, -1.0, 0.0)
+    pass_index = 0
+    timed_out = False
+
+    while time.monotonic() < deadline:
+        strategy = strategy_cycle[(run_number + pass_index - 1) % len(strategy_cycle)]
+        lookahead_enabled = pass_index % 2 == 0
+        remaining: dict[str, int] = {part.part_id: max(part.quantity, 1) for part in enabled_parts}
+        placed_counts = {part.part_id: 0 for part in enabled_parts}
+        area_contribution = {part.part_id: 0.0 for part in enabled_parts}
+        layout_map: dict[tuple[str, int], list[Placement]] = {}
+        geometry_map: dict[tuple[str, int], list[Polygon]] = {}
+        stop_filling = False
+
+        try:
+            for sheet, instance in _sheet_instances(sheets):
+                _check_deadline(deadline)
+                placed_polygons = geometry_map.setdefault((sheet.sheet_id, instance), [])
+                while not stop_filling:
+                    _check_deadline(deadline)
+                    placement = _select_next_placement(
+                        parts=active_parts,
+                        sheet=sheet,
+                        placed_polygons=placed_polygons,
+                        placed_counts=placed_counts,
+                        rotations=rotations,
+                        gap=gap,
+                        mode=mode,
+                        remaining=remaining,
+                        strategy=strategy,
+                        seed_priority=seed_priority,
+                        deadline=deadline,
+                        lookahead_enabled=lookahead_enabled,
+                    )
+                    if not placement:
+                        break
+                    layout_map.setdefault((sheet.sheet_id, instance), []).append(placement)
+                    placed_polygons.append(placement.polygon)
+                    placed_counts[placement.part_id] += 1
+                    area_contribution[placement.part_id] += float(placement.polygon.area)
+                    if progress_callback and sum(placed_counts.values()) % 5 == 0:
+                        progress_callback(
+                            min(sum(placed_counts.values()) / max(len(enabled_parts) * 8, 1), 0.99),
+                            f"Optimization pass {pass_index + 1}: testing {strategy} placement strategy.",
+                        )
+                    if mode == "batch_quantity":
+                        remaining[placement.part_id] = max(remaining[placement.part_id] - 1, 0)
+                        if all(value == 0 for value in remaining.values()):
+                            stop_filling = True
+                if stop_filling:
+                    break
+        except SearchTimeout:
+            timed_out = True
+
+        candidate_result = _build_result_from_state(
+            parts=parts,
+            enabled_parts=enabled_parts,
+            active_parts=active_parts,
+            sheets=sheets,
+            mode=mode,
+            layout_map=layout_map,
+            placed_counts=placed_counts,
+            area_contribution=area_contribution,
+            remaining=remaining,
+            fit_on_empty_sheet=fit_on_empty_sheet,
+            debug_enabled=debug_enabled,
+            source_units=source_units,
+            source_max_extent=source_max_extent,
+            timed_out=timed_out,
+            run_number=run_number,
+            previous_yield=previous_yield,
+        )
+        candidate_score = (
+            float(candidate_result.get("yield_ratio", 0.0)),
+            float(candidate_result.get("used_area", 0.0)),
+            float(candidate_result.get("total_parts_placed", 0.0)),
+            -float(candidate_result.get("layouts_used", 0.0)),
+        )
+        if best_result is None or candidate_score > best_score:
+            best_result = candidate_result
+            best_score = candidate_score
+
+        if not timed_out and candidate_result.get("status") == "SUCCEEDED":
+            break
+        if timed_out:
+            break
+        pass_index += 1
+
+    if best_result is None:
+        zero_remaining = {part.part_id: max(part.quantity, 1) for part in enabled_parts}
+        best_result = _build_result_from_state(
+            parts=parts,
+            enabled_parts=enabled_parts,
+            active_parts=active_parts,
+            sheets=sheets,
+            mode=mode,
+            layout_map={},
+            placed_counts={part.part_id: 0 for part in enabled_parts},
+            area_contribution={part.part_id: 0.0 for part in enabled_parts},
+            remaining=zero_remaining,
+            fit_on_empty_sheet=fit_on_empty_sheet,
+            debug_enabled=debug_enabled,
+            source_units=source_units,
+            source_max_extent=source_max_extent,
+            timed_out=True,
+            run_number=run_number,
+            previous_yield=previous_yield,
+        )
+    return best_result

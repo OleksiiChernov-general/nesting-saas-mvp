@@ -65,7 +65,7 @@ def get_nesting_job_result(job_id: uuid.UUID, db: Session = Depends(get_db)) -> 
     job = db.get(NestingJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.state != JobState.SUCCEEDED:
+    if job.state not in {JobState.SUCCEEDED, JobState.PARTIAL}:
         raise HTTPException(status_code=409, detail=f"Job is {job.state}")
     return NestingResultResponse.model_validate(get_job_result(job))
 
@@ -75,6 +75,6 @@ def download_nesting_job_artifact(job_id: uuid.UUID, db: Session = Depends(get_d
     job = db.get(NestingJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.state != JobState.SUCCEEDED or not job.artifact_path:
+    if job.state not in {JobState.SUCCEEDED, JobState.PARTIAL} or not job.artifact_path:
         raise HTTPException(status_code=409, detail=f"Artifact is unavailable while job is {job.state}")
     return FileResponse(job.artifact_path, media_type="application/json", filename=result_download_name(job.id))

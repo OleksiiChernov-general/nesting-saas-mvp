@@ -168,7 +168,7 @@ export function App() {
         if (pollTokenRef.current !== token) return;
         setJob(nextJob);
 
-        if (nextJob.state === "SUCCEEDED") {
+        if (nextJob.state === "SUCCEEDED" || nextJob.state === "PARTIAL") {
           const nextResult = await apiClient.getResult(nextJob.id);
           if (pollTokenRef.current !== token) return;
           setResult(nextResult);
@@ -246,7 +246,7 @@ export function App() {
   }, [form.gap, form.nestingMode, form.sheetHeight, form.sheetQuantity, form.sheetWidth, uploadedFiles]);
 
   const previewPolygons = cleanupResult?.polygons ?? importResult?.polygons ?? [];
-  const canShowResult = Boolean(result && job?.state === "SUCCEEDED");
+  const canShowResult = Boolean(result && job && (job.state === "SUCCEEDED" || job.state === "PARTIAL"));
   const importAudit = useMemo(() => {
     if (!uploadedFiles.length) return null;
     const audits = uploadedFiles.flatMap((file) => (file.response?.audit ? [file.response.audit] : []));
@@ -438,6 +438,7 @@ export function App() {
 
       const response = await apiClient.createJob({
         mode: form.nestingMode,
+        previous_job_id: result?.job_id ?? job?.id ?? null,
         parts: cleanupReadyParts.map((part) => ({
           part_id: part.partId,
           filename: part.name,
@@ -503,7 +504,9 @@ export function App() {
     : job?.state === "FAILED"
       ? "Previous job failed. Update inputs if needed and run again."
       : cleanupReadyParts.length > 0
-        ? "Step 6: Review the part list, choose the mode, and run nesting."
+        ? result
+          ? "Step 6: Run another bounded optimization pass to try improving the current result."
+          : "Step 6: Review the part list, choose the mode, and run nesting."
         : "Cleanup must succeed before nesting.";
   const heroStats = [
     { label: "Uploaded parts", value: `${uploadedFiles.length}` },
@@ -618,6 +621,7 @@ export function App() {
               scaleWarning={scaleWarning}
               scaleWarningAcknowledged={scaleWarningAcknowledged}
               statusMessage={nestingStatus}
+              submitLabel={result ? "Improve Result" : "Run Nesting"}
             />
           </aside>
 
