@@ -316,7 +316,9 @@ describe("App multi-part nesting workflow", () => {
 
     const createCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/v1/nesting/jobs"));
     expect(createCall).toBeTruthy();
-    const requestBody = JSON.parse(String((createCall?.[1] as RequestInit).body));
+    const requestInit = createCall?.[1];
+    expect(requestInit).toBeDefined();
+    const requestBody = JSON.parse(String((requestInit as RequestInit).body));
     expect(requestBody.mode).toBe("fill_sheet");
     expect(requestBody.sheet.units).toBe("mm");
     expect(requestBody.parts).toHaveLength(2);
@@ -367,7 +369,9 @@ describe("App multi-part nesting workflow", () => {
 
     const createCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/v1/nesting/jobs"));
     expect(createCall).toBeTruthy();
-    const requestBody = JSON.parse(String((createCall?.[1] as RequestInit).body));
+    const requestInit = createCall?.[1];
+    expect(requestInit).toBeDefined();
+    const requestBody = JSON.parse(String((requestInit as RequestInit).body));
     expect(requestBody.mode).toBe("batch_quantity");
     expect(requestBody.parts).toHaveLength(2);
     expect(requestBody.parts[0].quantity).toBe(5);
