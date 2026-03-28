@@ -311,8 +311,9 @@ def test_timeout_returns_best_valid_layout_so_far(monkeypatch: pytest.MonkeyPatc
         return original_select(*args, **kwargs)
 
     monkeypatch.setattr(nesting_module, "_select_next_placement", slow_select)
+    monkeypatch.setattr(nesting_module, "_grid_pack_single_part", lambda **kwargs: None)
 
-    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=rectangle(10, 10), quantity=20)]
+    parts = [PartSpec(part_id="panel", filename="panel.dxf", polygon=Polygon([(0, 0), (10, 0), (7, 8), (0, 0)]), quantity=20)]
     sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
 
     started = time.perf_counter()
@@ -350,3 +351,17 @@ def test_iterative_run_carries_previous_yield_metadata():
     assert second_result["run_number"] == 2
     assert second_result["previous_yield"] == first_result["yield"]
     assert second_result["best_yield"] >= first_result["yield"]
+
+
+def test_fill_sheet_rectangle_heavy_case_no_longer_stalls_at_tiny_yield():
+    parts = [
+        PartSpec(part_id="rect", filename="rectangle_40x25_mm.dxf", polygon=rectangle(40, 25), quantity=1),
+        PartSpec(part_id="tri", filename="triangle_50x30x30_mm.dxf", polygon=Polygon([(0, 0), (50, 0), (30, 30), (0, 0)]), quantity=1),
+    ]
+    sheets = [SheetSpec(sheet_id="sheet-1", width=100, height=100, quantity=1)]
+
+    result = nest(parts, sheets, {"mode": "fill_sheet", "gap": 0.0, "rotation": [0, 180], "objective": "maximize_yield", "time_limit_sec": 5})
+
+    assert result["status"] == "SUCCEEDED"
+    assert result["yield"] >= 0.8
+    assert result["parts_placed"] >= 8

@@ -66,6 +66,17 @@ def _oriented_polygon(polygon: Polygon, rotation: int) -> Polygon:
     return _normalize_to_origin(rotated)
 
 
+def _is_axis_aligned_rectangle(polygon: Polygon) -> bool:
+    if polygon.is_empty or not polygon.is_valid:
+        return False
+    coords = list(polygon.exterior.coords)
+    if len(coords) != 5:
+        return False
+    min_x, min_y, max_x, max_y = polygon.bounds
+    bbox_area = max(max_x - min_x, 0.0) * max(max_y - min_y, 0.0)
+    return abs(bbox_area - float(polygon.area)) <= EPSILON
+
+
 def _sheet_instances(sheets: list[SheetSpec]) -> list[tuple[SheetSpec, int]]:
     instances: list[tuple[SheetSpec, int]] = []
     for sheet in sorted(sheets, key=lambda item: (item.sheet_id, item.width, item.height, item.quantity)):
@@ -268,12 +279,6 @@ def _candidate_axis_positions(
             if raw < -EPSILON or raw > max_anchor + EPSILON:
                 continue
             positions.add(round(min(max(raw, 0.0), max_anchor), 6))
-
-    grid_step = max(size * 0.5, 0.5)
-    cursor = 0.0
-    while cursor <= max_anchor + EPSILON:
-        positions.add(round(min(cursor, max_anchor), 6))
-        cursor += grid_step
 
     return sorted(positions)
 
@@ -525,6 +530,105 @@ def _part_can_fit_empty_sheet(part: PartSpec, sheets: list[SheetSpec], rotations
     return False
 
 
+def _grid_pack_single_part(
+    *,
+    part: PartSpec,
+    sheets: list[SheetSpec],
+    rotations: list[int],
+    gap: float,
+    mode: NestingMode,
+    run_number: int,
+    previous_yield: float,
+    enabled_parts: list[PartSpec],
+    active_parts: list[PartSpec],
+    debug_enabled: bool,
+    source_units: str | None,
+    source_max_extent: float | None,
+    deadline: float | None,
+) -> dict | None:
+    best_result: dict | None = None
+    best_score = (-1.0, -1.0, -1.0, 0.0)
+
+    for rotation in rotations:
+        _check_deadline(deadline)
+        oriented = _oriented_polygon(part.polygon, rotation)
+        if not _is_axis_aligned_rectangle(oriented):
+            continue
+
+        step_x = oriented.bounds[2] + gap
+        step_y = oriented.bounds[3] + gap
+        if step_x <= EPSILON or step_y <= EPSILON:
+            continue
+
+        placed_counts = {item.part_id: 0 for item in enabled_parts}
+        area_contribution = {item.part_id: 0.0 for item in enabled_parts}
+        remaining = {item.part_id: max(item.quantity, 1) for item in enabled_parts}
+        fit_on_empty_sheet = {item.part_id: (item.part_id == part.part_id) for item in enabled_parts}
+        layout_map: dict[tuple[str, int], list[Placement]] = {}
+
+        stop = False
+        for sheet, instance in _sheet_instances(sheets):
+            _check_deadline(deadline)
+            y = 0.0
+            while y + oriented.bounds[3] <= sheet.height + EPSILON and not stop:
+                x = 0.0
+                while x + oriented.bounds[2] <= sheet.width + EPSILON:
+                    _check_deadline(deadline)
+                    candidate = affinity.translate(oriented, xoff=x, yoff=y)
+                    layout_map.setdefault((sheet.sheet_id, instance), []).append(
+                        Placement(
+                            part_id=part.part_id,
+                            sheet_id=sheet.sheet_id,
+                            instance=placed_counts[part.part_id] + 1,
+                            rotation=rotation,
+                            x=x,
+                            y=y,
+                            polygon=candidate,
+                        )
+                    )
+                    placed_counts[part.part_id] += 1
+                    area_contribution[part.part_id] += float(candidate.area)
+                    if mode == "batch_quantity":
+                        remaining[part.part_id] = max(remaining[part.part_id] - 1, 0)
+                        if remaining[part.part_id] == 0:
+                            stop = True
+                            break
+                    x += step_x
+                y += step_y
+            if stop:
+                break
+
+        candidate_result = _build_result_from_state(
+            parts=enabled_parts,
+            enabled_parts=enabled_parts,
+            active_parts=active_parts,
+            sheets=sheets,
+            mode=mode,
+            layout_map=layout_map,
+            placed_counts=placed_counts,
+            area_contribution=area_contribution,
+            remaining=remaining,
+            fit_on_empty_sheet=fit_on_empty_sheet,
+            debug_enabled=debug_enabled,
+            source_units=source_units,
+            source_max_extent=source_max_extent,
+            timed_out=False,
+            run_number=run_number,
+            previous_yield=previous_yield,
+        )
+        score = (
+            float(candidate_result.get("yield_ratio", 0.0)),
+            float(candidate_result.get("used_area", 0.0)),
+            float(candidate_result.get("total_parts_placed", 0.0)),
+            -float(candidate_result.get("layouts_used", 0.0)),
+        )
+        if best_result is None or score > best_score:
+            best_result = candidate_result
+            best_score = score
+
+    return best_result
+
+
 def _build_result_from_state(
     *,
     parts: list[PartSpec],
@@ -714,6 +818,39 @@ def nest(parts: list[PartSpec], sheets: list[SheetSpec], params: dict) -> dict:
     best_score = (-1.0, -1.0, -1.0, 0.0)
     pass_index = 0
     timed_out = False
+
+    try:
+        for part in active_parts:
+            grid_result = _grid_pack_single_part(
+                part=part,
+                sheets=sheets,
+                rotations=rotations,
+                gap=gap,
+                mode=mode,
+                run_number=run_number,
+                previous_yield=previous_yield,
+                enabled_parts=enabled_parts,
+                active_parts=active_parts,
+                debug_enabled=debug_enabled,
+                source_units=source_units,
+                source_max_extent=source_max_extent,
+                deadline=deadline,
+            )
+            if grid_result is None:
+                continue
+            grid_score = (
+                float(grid_result.get("yield_ratio", 0.0)),
+                float(grid_result.get("used_area", 0.0)),
+                float(grid_result.get("total_parts_placed", 0.0)),
+                -float(grid_result.get("layouts_used", 0.0)),
+            )
+            if best_result is None or grid_score > best_score:
+                best_result = grid_result
+                best_score = grid_score
+            if grid_result.get("yield_ratio", 0.0) >= 0.85:
+                return grid_result
+    except SearchTimeout:
+        timed_out = True
 
     while time.monotonic() < deadline:
         strategy = strategy_cycle[(run_number + pass_index - 1) % len(strategy_cycle)]
