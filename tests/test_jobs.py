@@ -3,9 +3,13 @@ from __future__ import annotations
 from uuid import UUID
 
 import ezdxf
+import pytest
 
 from app.db import get_session_factory
 from app.models import JobState, NestingJob
+from app.native_runner import NativePOCResult, NativeRunnerError
+from app.services import EngineRunTimeout, run_timeout_probe
+from app.settings import get_settings
 from app.worker import process_next_job
 
 
@@ -30,6 +34,21 @@ def test_worker_processes_job(client, sample_job_payload):
         assert job.status_message is not None
         assert job.started_at is not None
         assert job.finished_at is not None
+
+
+def test_default_backend_uses_python_when_request_omits_engine_backend(client, sample_job_payload):
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    assert create_response.status_code == 202
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    result_body = result_response.json()
+    assert result_body["engine_backend_requested"] == "python"
+    assert result_body["engine_backend_used"] == "python"
+    assert result_body["engine_fallback_reason"] is None
 
 
 def test_full_integration_flow(client, tmp_path, sample_job_payload):
@@ -72,6 +91,9 @@ def test_full_integration_flow(client, tmp_path, sample_job_payload):
             "filename": "part-b.dxf",
             "enabled": True,
             "quantity": 1,
+            "order_id": "order-b",
+            "order_name": "Order B",
+            "priority": 1,
             "polygon": {
                 "points": [
                     {"x": 0, "y": 0},
@@ -82,6 +104,9 @@ def test_full_integration_flow(client, tmp_path, sample_job_payload):
                 ]
             },
         }
+    )
+    sample_job_payload["batch"]["orders"].append(
+        {"order_id": "order-b", "order_name": "Order B", "priority": 1, "part_ids": ["part-b"]}
     )
 
     create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
@@ -109,15 +134,107 @@ def test_full_integration_flow(client, tmp_path, sample_job_payload):
     assert body["mode"] == "batch_quantity"
     assert body["summary"]["total_parts"] == 2
     assert len(body["parts"]) == 2
+    assert body["batch"]["batch_id"] == "batch-alpha"
+    assert [order["order_id"] for order in body["batch"]["orders"]] == ["order-a", "order-b"]
     assert all("requested_quantity" in part for part in body["parts"])
     assert all("placed_quantity" in part for part in body["parts"])
     assert all("remaining_quantity" in part for part in body["parts"])
+    assert all("order_id" in part for part in body["parts"])
+    assert all("priority" in part for part in body["parts"])
+    assert all("order_id" in placement for layout in body["layouts"] for placement in layout["placements"])
+    placements_by_part = {
+        placement["part_id"]: placement
+        for layout in body["layouts"]
+        for placement in layout["placements"]
+    }
+    assert placements_by_part["part-a"]["order_id"] == "order-a"
+    assert placements_by_part["part-b"]["order_id"] == "order-b"
+    assert placements_by_part["part-b"]["priority"] == 1
 
     artifact_response = client.get(f"/v1/nesting/jobs/{job_id}/artifact")
     assert artifact_response.status_code == 200
     assert artifact_response.headers["content-type"].startswith("application/json")
     assert "attachment; filename=" in artifact_response.headers["content-disposition"]
     assert artifact_response.json()["job_id"] == job_id
+
+    dxf_response = client.get(f"/v1/nesting/jobs/{job_id}/artifact/dxf")
+    assert dxf_response.status_code == 200
+    assert dxf_response.headers["content-type"].startswith("application/dxf")
+    assert len(dxf_response.content) > 0
+
+    pdf_response = client.get(f"/v1/nesting/jobs/{job_id}/artifact/pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"].startswith("application/pdf")
+    assert pdf_response.content.startswith(b"%PDF")
+    assert b"Nestora PDF Report" in pdf_response.content
+
+    assert len(body["artifacts"]) == 3
+    assert body["artifacts"][0]["status"] == "available"
+    assert body["artifacts"][1]["kind"] == "dxf"
+    assert body["artifacts"][1]["status"] == "available"
+    assert body["artifacts"][2]["status"] == "available"
+    assert body["economics"]["status"] == "available"
+    assert body["economics"]["material_cost"] == 25.0
+    assert body["economics"]["used_material_cost"] == pytest.approx(5.0)
+    assert body["economics"]["waste_cost"] == pytest.approx(20.0)
+    assert body["economics"]["currency"] == "USD"
+    assert body["economics"]["used_material_cost_estimated"] is True
+    assert body["offcut_summary"]["approximation"] is True
+    assert body["offcut_summary"]["total_leftover_area"] == pytest.approx(body["scrap_area"])
+    assert body["offcut_summary"]["reusable_leftover_area"] >= 0
+    assert body["offcut_summary"]["reusable_area_estimate"] == pytest.approx(body["offcut_summary"]["reusable_leftover_area"])
+    assert body["offcut_summary"]["estimated_scrap_area"] >= 0
+    assert isinstance(body["offcut_summary"]["leftover_summaries"], list)
+    assert isinstance(body["offcuts"], list)
+    assert all("bounds" in piece for piece in body["offcuts"])
+
+
+def test_batch_result_preserves_explicit_order_grouping_for_multiple_orders(client, sample_job_payload):
+    sample_job_payload["parts"].append(
+        {
+            "part_id": "part-b",
+            "filename": "part-b.dxf",
+            "enabled": True,
+            "quantity": 1,
+            "order_id": "order-b",
+            "order_name": "Order B",
+            "priority": 1,
+            "polygon": {
+                "points": [
+                    {"x": 0, "y": 0},
+                    {"x": 10, "y": 0},
+                    {"x": 10, "y": 10},
+                    {"x": 0, "y": 10},
+                    {"x": 0, "y": 0},
+                ]
+            },
+        }
+    )
+    sample_job_payload["batch"] = {
+        "batch_id": "batch-combined",
+        "batch_name": "Combined Orders",
+        "orders": [
+            {"order_id": "order-a", "order_name": "Order A", "priority": 2, "part_ids": ["part-a"]},
+            {"order_id": "order-b", "order_name": "Order B", "priority": 1, "part_ids": ["part-b"]},
+        ],
+    }
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    assert create_response.status_code == 202
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    status_body = client.get(f"/v1/nesting/jobs/{job_id}").json()
+    result_body = client.get(f"/v1/nesting/jobs/{job_id}/result").json()
+
+    assert status_body["batch"]["batch_id"] == "batch-combined"
+    assert [order["order_id"] for order in status_body["batch"]["orders"]] == ["order-a", "order-b"]
+    assert result_body["batch"]["batch_name"] == "Combined Orders"
+    assert [order["part_ids"] for order in result_body["batch"]["orders"]] == [["part-a"], ["part-b"]]
+    by_part = {part["part_id"]: part for part in result_body["parts"]}
+    assert by_part["part-a"]["order_id"] == "order-a"
+    assert by_part["part-b"]["order_id"] == "order-b"
 
 
 def test_fill_sheet_multi_part_integration_flow(client, sample_job_payload):
@@ -441,3 +558,168 @@ def test_worker_failure_is_persisted(client, sample_job_payload):
         assert job.error
         assert job.finished_at is not None
         assert job.progress <= 0.95
+
+
+def test_native_backend_falls_back_to_python_automatically(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "native_poc_enabled", True)
+
+    def fake_native_runner(*args, **kwargs):
+        raise NativeRunnerError("native backend smoke failure")
+
+    monkeypatch.setattr("app.services.run_native_poc", fake_native_runner)
+    sample_job_payload["engine_backend"] = "native"
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    assert create_response.status_code == 202
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    status_response = client.get(f"/v1/nesting/jobs/{job_id}")
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["state"] == "SUCCEEDED"
+    assert status_body["engine_backend_requested"] == "native"
+    assert status_body["engine_backend_used"] == "python"
+    assert "native backend smoke failure" in (status_body["engine_fallback_reason"] or "")
+
+    result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    result_body = result_response.json()
+    assert result_body["engine_backend_requested"] == "native"
+    assert result_body["engine_backend_used"] == "python"
+    assert "native backend smoke failure" in (result_body["engine_fallback_reason"] or "")
+    assert result_body["layouts"]
+
+
+def test_explicit_python_backend_uses_python_path(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+    native_calls = 0
+
+    def fake_native_runner(*args, **kwargs):
+        nonlocal native_calls
+        native_calls += 1
+        raise AssertionError("native runner should not be called for explicit python backend")
+
+    monkeypatch.setattr("app.services.run_native_poc", fake_native_runner)
+    sample_job_payload["engine_backend"] = "python"
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    result_body = result_response.json()
+    assert result_body["engine_backend_requested"] == "python"
+    assert result_body["engine_backend_used"] == "python"
+    assert result_body["engine_fallback_reason"] is None
+    assert native_calls == 0
+
+
+def test_native_backend_disabled_falls_back_to_python(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "native_poc_enabled", False)
+
+    def fake_native_runner(*args, **kwargs):
+        raise AssertionError("native runner should not be called while native backend is disabled")
+
+    monkeypatch.setattr("app.services.run_native_poc", fake_native_runner)
+    sample_job_payload["engine_backend"] = "native"
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    status_response = client.get(f"/v1/nesting/jobs/{job_id}")
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["engine_backend_requested"] == "native"
+    assert status_body["engine_backend_used"] == "python"
+    assert "NESTING_NATIVE_POC_ENABLED is false" in (status_body["engine_fallback_reason"] or "")
+
+
+def test_native_backend_without_stable_layout_payload_falls_back_to_python(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "native_poc_enabled", True)
+
+    def fake_native_runner(*args, **kwargs):
+        return NativePOCResult(
+            status="PARSED_READY_FOR_ADAPTER",
+            backend_name="summary_stub",
+            backend_available=True,
+            converted_part_count=1,
+            placement_count=0,
+            bins_used=0,
+            payload={"status": "PARSED_READY_FOR_ADAPTER", "backend_available": True},
+            stdout='{"status":"PARSED_READY_FOR_ADAPTER"}',
+            stderr="",
+            exit_code=0,
+            input_digest="sha256:test",
+            artifact_dir=None,
+        )
+
+    monkeypatch.setattr("app.services.run_native_poc", fake_native_runner)
+    sample_job_payload["engine_backend"] = "native"
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
+    assert result_response.status_code == 200
+    result_body = result_response.json()
+    assert result_body["engine_backend_requested"] == "native"
+    assert result_body["engine_backend_used"] == "python"
+    assert "stable job result payload" in (result_body["engine_fallback_reason"] or "")
+
+
+def test_python_timeout_probe_terminates_synthetic_long_task() -> None:
+    with pytest.raises(EngineRunTimeout) as excinfo:
+        run_timeout_probe(seconds=2.0, timeout_seconds=1.0)
+
+    assert excinfo.value.timeout_seconds == 1.0
+    assert excinfo.value.engine_backend == "python"
+
+
+def test_worker_timeout_is_persisted_and_leaves_no_running_job(
+    client,
+    sample_job_payload,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "max_compute_seconds", 1.0)
+
+    def fake_run_nesting_backend(**kwargs):
+        raise EngineRunTimeout(
+            "Python nesting engine timed out after 1.0s",
+            engine_backend="python",
+            timeout_seconds=1.0,
+        )
+
+    monkeypatch.setattr("app.services._run_nesting_backend", fake_run_nesting_backend)
+
+    create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
+    job_id = create_response.json()["id"]
+
+    assert process_next_job(timeout=1) is True
+
+    status_response = client.get(f"/v1/nesting/jobs/{job_id}")
+    assert status_response.status_code == 200
+    status_body = status_response.json()
+    assert status_body["state"] == "FAILED"
+    assert status_body["timed_out"] is True
+    assert status_body["error_type"] == "timeout"
+    assert status_body["timeout_seconds"] == 1.0
+    assert "timed out" in (status_body["status_message"] or "").lower()
+
+    with get_session_factory()() as db:
+        job = db.get(NestingJob, UUID(job_id))
+        assert job is not None
+        assert job.state == JobState.FAILED
+        assert job.finished_at is not None
+        assert job.heartbeat_at is not None
+        assert job.state != JobState.RUNNING

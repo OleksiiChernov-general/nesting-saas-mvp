@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nestora.local/schemas/artifact_state.json",
+  "title": "Nestora Artifact Descriptor",
+  "description": "Artifact state contract returned on job status and result payloads for JSON, DXF, and PDF exports.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "label",
+    "status",
+    "message"
+  ],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["json", "dxf", "pdf"],
+      "description": "Artifact kind exposed by the backend."
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable artifact name for the UI."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["available", "processing", "failed", "unavailable"],
+      "description": "Truthful state shown in screen 3."
+    },
+    "url": {
+      "type": ["string", "null"],
+      "description": "Download or fetch URL. Present only when the artifact is available."
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Explicit status explanation rendered in the UI."
+    },
+    "content_type": {
+      "type": ["string", "null"],
+      "description": "HTTP content type for download responses when known."
+    },
+    "filename": {
+      "type": ["string", "null"],
+      "description": "Suggested download filename when the artifact is available."
+    }
+  }
+}

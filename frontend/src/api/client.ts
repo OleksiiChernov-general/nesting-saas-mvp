@@ -3,6 +3,8 @@ import type {
   HealthResponse,
   ImportResponse,
   JobResponse,
+  MaterialInput,
+  MaterialRecord,
   NestingJobCreateRequest,
   NestingResultResponse,
   PolygonPayload,
@@ -13,6 +15,7 @@ import {
   normalizeHealthResponse,
   normalizeImportResponse,
   normalizeJobResponse,
+  normalizeMaterialRecord,
   normalizeResultResponse,
 } from "./normalizers";
 
@@ -83,6 +86,31 @@ export const apiClient = {
       body: JSON.stringify({ polygons, tolerance: 0.5 }),
     });
     return normalizeCleanupResponse(response);
+  },
+
+  async getMaterials(): Promise<MaterialRecord[]> {
+    const response = await request("/v1/materials");
+    return Array.isArray(response) ? response.map((item, index) => normalizeMaterialRecord(item, index)) : [];
+  },
+
+  async createMaterial(payload: MaterialInput): Promise<MaterialRecord> {
+    return normalizeMaterialRecord(
+      await request("/v1/materials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    );
+  },
+
+  async updateMaterial(materialId: string, payload: MaterialInput): Promise<MaterialRecord> {
+    return normalizeMaterialRecord(
+      await request(`/v1/materials/${materialId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    );
   },
 
   async createJob(payload: NestingJobCreateRequest): Promise<JobResponse> {

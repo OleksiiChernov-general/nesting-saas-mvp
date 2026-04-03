@@ -14,6 +14,15 @@ import type {
   Point,
   PolygonPayload,
   SheetLayoutResponse,
+  ArtifactDescriptor,
+  EconomicMetrics,
+  MaterialRecord,
+  OffcutPiece,
+  OffcutSummary,
+  OffcutSheetSummary,
+  LeftoverSummary,
+  BatchInput,
+  BatchOrder,
 } from "../types/api";
 import { API_BASE_URL } from "./config";
 
@@ -65,6 +74,143 @@ function normalizeBoundsPayload(value: unknown) {
     max_y: toNumber(record.max_y),
     width: toNumber(record.width),
     height: toNumber(record.height),
+  };
+}
+
+function normalizeBatchOrder(value: unknown, index: number): BatchOrder {
+  const record = value as Record<string, unknown> | null;
+  return {
+    order_id: toStringValue(record?.order_id, `order-${index + 1}`),
+    order_name: typeof record?.order_name === "string" ? record.order_name : null,
+    priority: typeof record?.priority === "number" ? record.priority : null,
+    part_ids: Array.isArray(record?.part_ids) ? record.part_ids.map((item, partIndex) => toStringValue(item, `part-${partIndex + 1}`)) : [],
+  };
+}
+
+function normalizeBatchInput(value: unknown): BatchInput | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    batch_id: typeof record.batch_id === "string" ? record.batch_id : null,
+    batch_name: typeof record.batch_name === "string" ? record.batch_name : null,
+    orders: Array.isArray(record.orders) ? record.orders.map((item, index) => normalizeBatchOrder(item, index)) : [],
+  };
+}
+
+function normalizeArtifactDescriptor(value: unknown, index: number): ArtifactDescriptor {
+  const record = value as Record<string, unknown> | null;
+  const kind = toStringValue(record?.kind, index === 0 ? "json" : index === 1 ? "dxf" : "pdf");
+  const url =
+    typeof record?.url === "string"
+      ? record.url.startsWith("/")
+        ? `${API_BASE_URL}${record.url}`
+        : record.url
+      : null;
+  return {
+    kind: kind === "dxf" || kind === "pdf" ? kind : "json",
+    label: toStringValue(record?.label, kind.toUpperCase()),
+    status:
+      record?.status === "available" ||
+      record?.status === "processing" ||
+      record?.status === "failed" ||
+      record?.status === "unavailable"
+        ? record.status
+        : "unavailable",
+    url,
+    message: toStringValue(record?.message, "Artifact state is unavailable."),
+    content_type: typeof record?.content_type === "string" ? record.content_type : null,
+    filename: typeof record?.filename === "string" ? record.filename : null,
+  };
+}
+
+function normalizeEconomicMetrics(value: unknown): EconomicMetrics | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    status: record.status === "available" ? "available" : "placeholder",
+    material_cost: typeof record.material_cost === "number" ? record.material_cost : null,
+    used_material_cost: typeof record.used_material_cost === "number" ? record.used_material_cost : null,
+    waste_cost: typeof record.waste_cost === "number" ? record.waste_cost : null,
+    savings_percent: typeof record.savings_percent === "number" ? record.savings_percent : null,
+    currency: typeof record.currency === "string" ? record.currency : null,
+    cost_basis: typeof record.cost_basis === "string" ? record.cost_basis : null,
+    material_cost_estimated: record.material_cost_estimated === true,
+    used_material_cost_estimated: record.used_material_cost_estimated === true,
+    waste_cost_estimated: record.waste_cost_estimated === true,
+    savings_percent_estimated: record.savings_percent_estimated === true,
+    message: toStringValue(record.message, "Economic metrics are unavailable."),
+  };
+}
+
+function normalizeOffcutPiece(value: unknown): OffcutPiece | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const bounds = normalizeBoundsPayload(record.bounds);
+  if (!bounds) return null;
+  return {
+    sheet_id: toStringValue(record.sheet_id, "sheet-1"),
+    instance: toNumber(record.instance, 1),
+    area: toNumber(record.area),
+    approx_shape:
+      record.approx_shape === "bounding_box" || record.approx_shape === "sheet_remainder" ? record.approx_shape : "rectangle",
+    bounds,
+    reusable: record.reusable !== false,
+    approximation: record.approximation !== false,
+    source: toStringValue(record.source, "unknown"),
+  };
+}
+
+function normalizeOffcutSheetSummary(value: unknown): OffcutSheetSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    sheet_id: toStringValue(record.sheet_id, "sheet-1"),
+    instance: toNumber(record.instance, 1),
+    sheet_area: toNumber(record.sheet_area),
+    used_area: toNumber(record.used_area),
+    scrap_area: toNumber(record.scrap_area),
+    reusable_leftover_area: toNumber(record.reusable_leftover_area),
+    estimated_scrap_area: toNumber(record.estimated_scrap_area),
+    reusable_piece_count: toNumber(record.reusable_piece_count),
+    approximation: record.approximation !== false,
+    approximation_method: toStringValue(record.approximation_method, "unknown"),
+    message: toStringValue(record.message, "Offcut summary is unavailable."),
+  };
+}
+
+function normalizeLeftoverSummary(value: unknown): LeftoverSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    sheet_id: toStringValue(record.sheet_id, "sheet-1"),
+    instance: toNumber(record.instance, 1),
+    width: toNumber(record.width),
+    height: toNumber(record.height),
+    area: toNumber(record.area),
+    approximate: record.approximate !== false,
+    source: typeof record.source === "string" ? record.source : null,
+  };
+}
+
+function normalizeOffcutSummary(value: unknown): OffcutSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  return {
+    total_leftover_area: toNumber(record.total_leftover_area),
+    reusable_leftover_area: toNumber(record.reusable_leftover_area),
+    reusable_area_estimate:
+      typeof record.reusable_area_estimate === "number" ? record.reusable_area_estimate : toNumber(record.reusable_leftover_area),
+    estimated_scrap_area: toNumber(record.estimated_scrap_area),
+    reusable_piece_count: toNumber(record.reusable_piece_count),
+    approximation: record.approximation !== false,
+    approximation_method: toStringValue(record.approximation_method, "unknown"),
+    message: toStringValue(record.message, "Offcut summary is unavailable."),
+    leftover_summaries: Array.isArray(record.leftover_summaries)
+      ? record.leftover_summaries.map(normalizeLeftoverSummary).filter((item): item is LeftoverSummary => item !== null)
+      : [],
+    sheets: Array.isArray(record.sheets)
+      ? record.sheets.map(normalizeOffcutSheetSummary).filter((item): item is OffcutSheetSummary => item !== null)
+      : [],
   };
 }
 
@@ -130,6 +276,24 @@ export function normalizeCleanupResponse(value: unknown): CleanGeometryResponse 
   };
 }
 
+export function normalizeMaterialRecord(value: unknown, index = 0): MaterialRecord {
+  const record = value as Record<string, unknown> | null;
+  return {
+    material_id: toStringValue(record?.material_id, `material-${index + 1}`),
+    name: toStringValue(record?.name, `Material ${index + 1}`),
+    thickness: toNumber(record?.thickness, 1),
+    sheet_width: toNumber(record?.sheet_width, 100),
+    sheet_height: toNumber(record?.sheet_height, 100),
+    units: record?.units === "in" ? "in" : "mm",
+    kerf: toNumber(record?.kerf, 0),
+    cost_per_sheet: typeof record?.cost_per_sheet === "number" ? record.cost_per_sheet : null,
+    currency: typeof record?.currency === "string" ? record.currency : null,
+    notes: typeof record?.notes === "string" ? record.notes : null,
+    created_at: toStringValue(record?.created_at),
+    updated_at: toStringValue(record?.updated_at),
+  };
+}
+
 export function normalizeJobResponse(value: unknown): JobResponse {
   const record = value as Record<string, unknown> | null;
   const state = toStringValue(record?.state, "FAILED");
@@ -168,10 +332,15 @@ export function normalizeJobResponse(value: unknown): JobResponse {
             remaining_quantity: Math.max(0, toNumber(part?.remaining_quantity)),
             enabled: typeof part?.enabled === "boolean" ? part.enabled : true,
             area_contribution: toNumber(part?.area_contribution),
+            order_id: typeof part?.order_id === "string" ? part.order_id : null,
+            order_name: typeof part?.order_name === "string" ? part.order_name : null,
+            priority: typeof part?.priority === "number" ? part.priority : null,
           };
         })
       : [],
+    batch: normalizeBatchInput(record?.batch),
     artifact_url: artifactUrl,
+    artifacts: Array.isArray(record?.artifacts) ? record.artifacts.map((item, index) => normalizeArtifactDescriptor(item, index)) : [],
     created_at: typeof record?.created_at === "string" ? record.created_at : null,
     queued_at: typeof record?.queued_at === "string" ? record.queued_at : null,
     started_at: typeof record?.started_at === "string" ? record.started_at : null,
@@ -183,6 +352,15 @@ export function normalizeJobResponse(value: unknown): JobResponse {
     previous_yield: toNumber(record?.previous_yield),
     best_yield: toNumber(record?.best_yield),
     improvement_percent: toNumber(record?.improvement_percent),
+    engine_backend_requested:
+      record?.engine_backend_requested === "native" || record?.engine_backend_requested === "python"
+        ? record.engine_backend_requested
+        : null,
+    engine_backend_used:
+      record?.engine_backend_used === "native" || record?.engine_backend_used === "python"
+        ? record.engine_backend_used
+        : null,
+    engine_fallback_reason: typeof record?.engine_fallback_reason === "string" ? record.engine_fallback_reason : null,
   };
 }
 
@@ -201,6 +379,9 @@ function normalizePlacement(value: unknown, index: number): PlacementResponse | 
     width: toNumber(record.width),
     height: toNumber(record.height),
     polygon,
+    order_id: typeof record.order_id === "string" ? record.order_id : null,
+    order_name: typeof record.order_name === "string" ? record.order_name : null,
+    priority: typeof record.priority === "number" ? record.priority : null,
   };
 }
 
@@ -326,9 +507,19 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
             remaining_quantity: Math.max(0, toNumber(part?.remaining_quantity)),
             enabled: typeof part?.enabled === "boolean" ? part.enabled : true,
             area_contribution: toNumber(part?.area_contribution),
+            order_id: typeof part?.order_id === "string" ? part.order_id : null,
+            order_name: typeof part?.order_name === "string" ? part.order_name : null,
+            priority: typeof part?.priority === "number" ? part.priority : null,
           };
         })
         : [],
+    batch: normalizeBatchInput(record?.batch),
+    artifacts: Array.isArray(record?.artifacts) ? record.artifacts.map((item, index) => normalizeArtifactDescriptor(item, index)) : [],
+    economics: normalizeEconomicMetrics(record?.economics),
+    offcuts: Array.isArray(record?.offcuts)
+      ? record.offcuts.map(normalizeOffcutPiece).filter((item): item is OffcutPiece => item !== null)
+      : [],
+    offcut_summary: normalizeOffcutSummary(record?.offcut_summary),
     unplaced_parts: Array.isArray(record?.unplaced_parts)
       ? record.unplaced_parts.map((item, index) => toStringValue(item, `part-${index + 1}`))
       : [],
@@ -355,6 +546,15 @@ export function normalizeResultResponse(value: unknown): NestingResultResponse {
           };
         })
       : [],
+    engine_backend_requested:
+      record?.engine_backend_requested === "native" || record?.engine_backend_requested === "python"
+        ? record.engine_backend_requested
+        : null,
+    engine_backend_used:
+      record?.engine_backend_used === "native" || record?.engine_backend_used === "python"
+        ? record.engine_backend_used
+        : null,
+    engine_fallback_reason: typeof record?.engine_fallback_reason === "string" ? record.engine_fallback_reason : null,
     debug:
       record?.debug && typeof record.debug === "object"
         ? {

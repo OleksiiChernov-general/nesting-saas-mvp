@@ -1,11 +1,13 @@
 import type { JobResponse } from "../../types/api";
 import { Panel } from "../../components/Panel";
+import type { Translate } from "../../i18n";
 
 type JobStatusPanelProps = {
   job: JobResponse | null;
   polling: boolean;
   error: string | null;
   disconnected: boolean;
+  t: Translate;
 };
 
 const stateTone: Record<string, string> = {
@@ -18,14 +20,14 @@ const stateTone: Record<string, string> = {
   CANCELLED: "bg-slate-700 text-slate-300",
 };
 
-export function JobStatusPanel({ job, polling, error, disconnected }: JobStatusPanelProps) {
-  const statusLabel = disconnected ? "Backend disconnected" : job?.state ?? "IDLE";
+export function JobStatusPanel({ job, polling, error, disconnected, t }: JobStatusPanelProps) {
+  const statusLabel = disconnected ? t("job.disconnected") : job ? t(`job.state.${job.state}`) : t("job.state.IDLE");
   const tone = disconnected ? "bg-rose-500/15 text-rose-300" : job ? stateTone[job.state] : "bg-slate-800 text-slate-300";
 
   return (
-    <Panel title="Job Status" subtitle="Track the active nesting run.">
+    <Panel title={t("job.title")} subtitle={t("job.subtitle")}>
       <div className="flex items-center justify-between rounded-2xl border border-[color:var(--border)] bg-black/15 px-4 py-3">
-        <span className="text-sm text-slate-400">Current state</span>
+        <span className="text-sm text-slate-400">{t("job.currentState")}</span>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${tone}`}>
           {statusLabel}
         </span>
@@ -33,7 +35,7 @@ export function JobStatusPanel({ job, polling, error, disconnected }: JobStatusP
       {job ? (
         <div className="rounded-2xl border border-[color:var(--border)] bg-white/[0.02] px-4 py-3">
           <div className="mb-2 flex items-center justify-between text-sm text-slate-400">
-            <span>Progress</span>
+            <span>{t("job.progress")}</span>
             <span>{Math.round((job.progress ?? 0) * 100)}%</span>
           </div>
           <div className="h-2 rounded-full bg-slate-800">
@@ -43,31 +45,31 @@ export function JobStatusPanel({ job, polling, error, disconnected }: JobStatusP
       ) : null}
       <div className="rounded-2xl border border-[color:var(--border)] bg-white/[0.02] px-4 py-3 text-sm text-slate-400">
         {disconnected
-          ? "Backend unavailable. Check the API server and VITE_API_BASE_URL."
+          ? t("job.backendUnavailable")
           : job?.status_message
             ? job.status_message
             : polling
-              ? "Polling backend every 1.5s..."
+              ? t("job.polling")
             : job?.state === "SUCCEEDED"
-              ? "Job completed successfully."
+              ? t("job.completed")
               : job?.state === "FAILED"
-                ? "Job failed. Fix inputs and run again."
-                : "Polling idle"}
+                ? t("job.failed")
+                : t("job.idle")}
       </div>
       {job?.mode || job?.summary ? (
         <div className="rounded-2xl border border-[color:var(--border)] bg-black/15 px-4 py-3 text-sm text-slate-300">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            {job.mode ? <span>Mode: <strong>{job.mode === "fill_sheet" ? "Fill Sheet" : "Batch Quantity"}</strong></span> : null}
-            {job.summary ? <span>Parts in job: <strong>{job.summary.total_parts}</strong></span> : null}
-            {typeof job.run_number === "number" ? <span>Run: <strong>{job.run_number}</strong></span> : null}
-            {typeof job.compute_time_sec === "number" && job.compute_time_sec > 0 ? <span>Compute: <strong>{job.compute_time_sec.toFixed(2)}s</strong></span> : null}
-            {typeof job.current_yield === "number" && job.current_yield > 0 ? <span>Yield: <strong>{(job.current_yield * 100).toFixed(2)}%</strong></span> : null}
+            {job.mode ? <span>{t("screen3.mode")}: <strong>{job.mode === "fill_sheet" ? t("nesting.fillSheet") : t("nesting.batchQuantity")}</strong></span> : null}
+            {job.summary ? <span>{t("job.partsInJob")}: <strong>{job.summary.total_parts}</strong></span> : null}
+            {typeof job.run_number === "number" ? <span>{t("screen3.runNumber")}: <strong>{job.run_number}</strong></span> : null}
+            {typeof job.compute_time_sec === "number" && job.compute_time_sec > 0 ? <span>{t("screen3.computeTime")}: <strong>{job.compute_time_sec.toFixed(2)}s</strong></span> : null}
+            {typeof job.current_yield === "number" && job.current_yield > 0 ? <span>{t("metrics.yield")}: <strong>{(job.current_yield * 100).toFixed(2)}%</strong></span> : null}
           </div>
         </div>
       ) : null}
       {typeof job?.improvement_percent === "number" && job.improvement_percent !== 0 ? (
         <div className={`rounded-2xl border px-4 py-3 text-sm ${job.improvement_percent > 0 ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-[color:var(--border)] bg-black/15 text-slate-300"}`}>
-          Improved by {job.improvement_percent.toFixed(2)}% vs previous run
+          {t("job.improvedBy", { value: job.improvement_percent.toFixed(2) })}
         </div>
       ) : null}
       {job?.artifact_url ? (
@@ -77,7 +79,7 @@ export function JobStatusPanel({ job, polling, error, disconnected }: JobStatusP
           rel="noreferrer"
           target="_blank"
         >
-          Download JSON Result
+          {t("job.downloadJson")}
         </a>
       ) : null}
       {job?.error ? <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{job.error}</div> : null}

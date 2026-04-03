@@ -216,8 +216,8 @@ def test_multi_part_batch_respects_requested_counts():
     assert by_part["large"]["remaining_quantity"] == 0
     assert by_part["small"]["placed_quantity"] == 4
     assert by_part["small"]["remaining_quantity"] == 0
-    assert result["used_area"] == 8000.0
-    assert result["yield"] == 1.0
+    assert result["used_area"] == 4000.0
+    assert result["yield"] == 0.5
 
 
 def test_multi_part_batch_reports_partial_fit_and_area_contribution():

@@ -14,6 +14,8 @@ def ensure_storage() -> None:
     settings.storage_dir.mkdir(parents=True, exist_ok=True)
     settings.imports_dir.mkdir(parents=True, exist_ok=True)
     settings.results_dir.mkdir(parents=True, exist_ok=True)
+    settings.materials_dir.mkdir(parents=True, exist_ok=True)
+    settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
 
 async def save_imported_file(upload: UploadFile, import_id: str) -> Path:
@@ -37,5 +39,29 @@ def result_download_name(job_id: UUID) -> str:
     return f"nesting-result-{job_id}.json"
 
 
+def artifact_download_name(job_id: UUID, artifact_kind: str) -> str:
+    if artifact_kind == "json":
+        return result_download_name(job_id)
+    return f"nesting-{artifact_kind}-{job_id}.{artifact_kind}"
+
+
+def artifact_store_path(job_id: UUID, artifact_kind: str) -> Path:
+    settings = get_settings()
+    ensure_storage()
+    return settings.artifacts_dir / artifact_download_name(job_id, artifact_kind)
+
+
+def artifact_error_path(job_id: UUID, artifact_kind: str) -> Path:
+    settings = get_settings()
+    ensure_storage()
+    return settings.artifacts_dir / f"nesting-{artifact_kind}-{job_id}.error.txt"
+
+
 def load_job_result(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def materials_store_path() -> Path:
+    settings = get_settings()
+    ensure_storage()
+    return settings.materials_dir / "materials.json"

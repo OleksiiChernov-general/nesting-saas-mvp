@@ -1,10 +1,13 @@
+import type { Translate } from "../i18n";
+
 type ConnectionBadgeProps = {
   connected: boolean;
   checking: boolean;
+  t: Translate;
 };
 
-export function ConnectionBadge({ connected, checking }: ConnectionBadgeProps) {
-  const label = checking ? "Checking" : connected ? "Connected" : "Disconnected";
+export function ConnectionBadge({ connected, checking, t }: ConnectionBadgeProps) {
+  const label = checking ? t("common.checking") : connected ? t("common.connected") : t("common.disconnected");
   const tone = checking
     ? "border border-amber-400/30 bg-amber-500/10 text-amber-200"
     : connected

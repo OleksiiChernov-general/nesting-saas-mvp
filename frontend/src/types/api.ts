@@ -69,6 +69,9 @@ export type PartInput = {
   quantity?: number;
   enabled?: boolean;
   fill_only?: boolean;
+  order_id?: string | null;
+  order_name?: string | null;
+  priority?: number | null;
   polygon: PolygonPayload;
 };
 
@@ -80,12 +83,56 @@ export type SheetInput = {
   units?: string;
 };
 
+export type MaterialRecord = {
+  material_id: string;
+  name: string;
+  thickness: number;
+  sheet_width: number;
+  sheet_height: number;
+  units: "mm" | "in";
+  kerf: number;
+  cost_per_sheet?: number | null;
+  currency?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MaterialInput = {
+  material_id?: string;
+  name: string;
+  thickness: number;
+  sheet_width: number;
+  sheet_height: number;
+  units: "mm" | "in";
+  kerf: number;
+  cost_per_sheet?: number | null;
+  currency?: string | null;
+  notes?: string | null;
+};
+
+export type BatchOrder = {
+  order_id: string;
+  order_name?: string | null;
+  priority?: number | null;
+  part_ids?: string[];
+};
+
+export type BatchInput = {
+  batch_id?: string | null;
+  batch_name?: string | null;
+  orders: BatchOrder[];
+};
+
 export type NestingJobCreateRequest = {
   mode: "fill_sheet" | "batch_quantity";
   parts: PartInput[];
   sheet: SheetInput;
   sheets?: SheetInput[];
+  material?: MaterialInput | null;
+  batch?: BatchInput | null;
   previous_job_id?: string | null;
+  engine_backend?: "python" | "native";
   params: {
     gap: number;
     rotation: Array<0 | 45 | 90 | 135 | 180 | 225 | 270 | 315>;
@@ -94,6 +141,79 @@ export type NestingJobCreateRequest = {
     source_units?: string | null;
     source_max_extent?: number | null;
   };
+};
+
+export type ArtifactDescriptor = {
+  kind: "json" | "dxf" | "pdf";
+  label: string;
+  status: "available" | "processing" | "failed" | "unavailable";
+  url?: string | null;
+  message: string;
+  content_type?: string | null;
+  filename?: string | null;
+};
+
+export type EconomicMetrics = {
+  status: "available" | "placeholder";
+  material_cost?: number | null;
+  used_material_cost?: number | null;
+  waste_cost?: number | null;
+  savings_percent?: number | null;
+  currency?: string | null;
+  cost_basis?: string | null;
+  material_cost_estimated?: boolean;
+  used_material_cost_estimated?: boolean;
+  waste_cost_estimated?: boolean;
+  savings_percent_estimated?: boolean;
+  message: string;
+};
+
+export type OffcutPiece = {
+  sheet_id: string;
+  instance: number;
+  area: number;
+  approx_shape: "rectangle" | "bounding_box" | "sheet_remainder";
+  bounds: BoundsPayload;
+  reusable: boolean;
+  approximation: boolean;
+  source: string;
+};
+
+export type OffcutSheetSummary = {
+  sheet_id: string;
+  instance: number;
+  sheet_area: number;
+  used_area: number;
+  scrap_area: number;
+  reusable_leftover_area: number;
+  estimated_scrap_area: number;
+  reusable_piece_count: number;
+  approximation: boolean;
+  approximation_method: string;
+  message: string;
+};
+
+export type LeftoverSummary = {
+  sheet_id: string;
+  instance: number;
+  width: number;
+  height: number;
+  area: number;
+  approximate: boolean;
+  source?: string | null;
+};
+
+export type OffcutSummary = {
+  total_leftover_area: number;
+  reusable_leftover_area: number;
+  reusable_area_estimate?: number;
+  estimated_scrap_area: number;
+  reusable_piece_count: number;
+  approximation: boolean;
+  approximation_method: string;
+  message: string;
+  leftover_summaries: LeftoverSummary[];
+  sheets: OffcutSheetSummary[];
 };
 
 export type JobResponse = {
@@ -114,8 +234,13 @@ export type JobResponse = {
     remaining_quantity: number;
     enabled?: boolean;
     area_contribution: number;
+    order_id?: string | null;
+    order_name?: string | null;
+    priority?: number | null;
   }>;
+  batch?: BatchInput | null;
   artifact_url?: string | null;
+  artifacts?: ArtifactDescriptor[];
   created_at?: string | null;
   queued_at?: string | null;
   started_at?: string | null;
@@ -127,6 +252,9 @@ export type JobResponse = {
   previous_yield?: number;
   best_yield?: number;
   improvement_percent?: number;
+  engine_backend_requested?: "python" | "native" | null;
+  engine_backend_used?: "python" | "native" | null;
+  engine_fallback_reason?: string | null;
 };
 
 export type PlacementResponse = {
@@ -139,6 +267,9 @@ export type PlacementResponse = {
   width: number;
   height: number;
   polygon: PolygonPayload;
+  order_id?: string | null;
+  order_name?: string | null;
+  priority?: number | null;
 };
 
 export type SheetLayoutResponse = {
@@ -222,7 +353,15 @@ export type NestingResultResponse = {
     remaining_quantity: number;
     enabled?: boolean;
     area_contribution: number;
+    order_id?: string | null;
+    order_name?: string | null;
+    priority?: number | null;
   }>;
+  batch?: BatchInput | null;
+  artifacts?: ArtifactDescriptor[];
+  economics?: EconomicMetrics | null;
+  offcuts?: OffcutPiece[];
+  offcut_summary?: OffcutSummary | null;
   unplaced_parts: string[];
   warnings?: string[];
   debug?: NestingDebugResponse | null;
@@ -241,4 +380,7 @@ export type NestingResultResponse = {
     compute_time_sec: number;
     improvement_percent: number;
   }>;
+  engine_backend_requested?: "python" | "native" | null;
+  engine_backend_used?: "python" | "native" | null;
+  engine_fallback_reason?: string | null;
 };

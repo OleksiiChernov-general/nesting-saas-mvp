@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import fakeredis
 import pytest
@@ -61,6 +64,9 @@ def sample_job_payload():
                 "quantity": 2,
                 "enabled": True,
                 "fill_only": False,
+                "order_id": "order-a",
+                "order_name": "Order A",
+                "priority": 2,
                 "polygon": {
                     "points": [
                         {"x": 0, "y": 0},
@@ -73,5 +79,21 @@ def sample_job_payload():
             }
         ],
         "sheet": {"sheet_id": "sheet-1", "width": 100, "height": 100, "quantity": 1, "units": "mm"},
+        "material": {
+            "name": "Steel",
+            "thickness": 3,
+            "sheet_width": 100,
+            "sheet_height": 100,
+            "units": "mm",
+            "kerf": 2,
+            "cost_per_sheet": 25,
+            "currency": "USD",
+            "notes": "Test material",
+        },
+        "batch": {
+            "batch_id": "batch-alpha",
+            "batch_name": "Batch Alpha",
+            "orders": [{"order_id": "order-a", "order_name": "Order A", "priority": 2, "part_ids": ["part-a"]}],
+        },
         "params": {"gap": 2.0, "rotation": [0, 180], "objective": "maximize_yield"},
     }

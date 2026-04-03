@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import sys
+from typing import Literal
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+NATIVE_POC_NAME = "libnest2d_poc.exe" if sys.platform.startswith("win") else "libnest2d_poc"
 
 
 def normalize_database_url(url: str) -> str:
@@ -32,6 +35,9 @@ class Settings(BaseSettings):
     job_heartbeat_interval_seconds: float = 2.0
     stale_job_timeout_seconds: int = 900
     max_compute_seconds: float = 60.0
+    engine_backend: Literal["python", "native"] = "python"
+    native_poc_enabled: bool = False
+    native_poc_executable: Path = BASE_DIR / "native" / "libnest2d-poc" / "build" / NATIVE_POC_NAME
 
     model_config = SettingsConfigDict(
         env_prefix="NESTING_",
@@ -49,6 +55,16 @@ class Settings(BaseSettings):
     @property
     def results_dir(self) -> Path:
         return self.storage_dir / "results"
+
+    @computed_field
+    @property
+    def materials_dir(self) -> Path:
+        return self.storage_dir / "materials"
+
+    @computed_field
+    @property
+    def artifacts_dir(self) -> Path:
+        return self.storage_dir / "artifacts"
 
     @property
     def is_sqlite(self) -> bool:

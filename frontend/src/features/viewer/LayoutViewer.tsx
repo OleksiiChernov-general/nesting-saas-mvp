@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Panel } from "../../components/Panel";
+import type { Translate } from "../../i18n";
 import type { NestingDebugResponse, PolygonPayload, SheetLayoutResponse } from "../../types/api";
 import { buildPolygonPath, createViewBox, getPreviewBounds } from "../../utils/viewer";
 import { SheetNavigator } from "./SheetNavigator";
@@ -12,6 +13,7 @@ type LayoutViewerProps = {
   activeSheetIndex: number;
   onSheetChange: (nextIndex: number) => void;
   canShowResult: boolean;
+  t: Translate;
 };
 
 const palette = ["#0f766e", "#2563eb", "#ca8a04", "#7c3aed", "#dc2626", "#0891b2"];
@@ -31,6 +33,7 @@ export function LayoutViewer({
   activeSheetIndex,
   onSheetChange,
   canShowResult,
+  t,
 }: LayoutViewerProps) {
   const safeLayouts = useMemo(
     () =>
@@ -76,8 +79,8 @@ export function LayoutViewer({
 
   return (
     <Panel
-      title="Layout Viewer"
-      subtitle={canShowResult && activeLayout ? "Nested layout preview" : "Geometry preview"}
+      title={t("viewer.title")}
+      subtitle={canShowResult && activeLayout ? t("viewer.nested") : t("viewer.geometry")}
       actions={
         <div className="flex items-center gap-3">
           <SheetNavigator
@@ -85,6 +88,7 @@ export function LayoutViewer({
             onNext={() => onSheetChange(Math.min(activeSheetIndex + 1, safeLayouts.length - 1))}
             onPrevious={() => onSheetChange(Math.max(activeSheetIndex - 1, 0))}
             total={safeLayouts.length}
+            t={t}
           />
           <div className="flex items-center gap-2">
             <button className="rounded-full border border-[color:var(--border)] bg-white/[0.03] px-3 py-1 text-sm text-slate-200 transition hover:border-accent hover:text-white" onClick={() => setZoom((value) => Math.min(value * 1.2, 6))} type="button">+</button>
@@ -97,7 +101,7 @@ export function LayoutViewer({
               }}
               type="button"
             >
-              Zoom to fit
+              {t("viewer.zoomToFit")}
             </button>
           </div>
         </div>
@@ -132,7 +136,7 @@ export function LayoutViewer({
                 <rect fill="#111827" height={activeLayout.height} rx={2} stroke="#374151" strokeWidth="1.5" width={activeLayout.width} x={0} y={0} />
                 {activeLayout.placements.length === 0 ? (
                   <text fill="#9ca3af" fontSize="5" x={activeLayout.width / 2 - 18} y={activeLayout.height / 2}>
-                    No parts placed on this sheet.
+                    {t("viewer.empty")}
                   </text>
                 ) : null}
                 <g transform={`translate(0 ${flipYAxis}) scale(1 -1)`}>
@@ -194,7 +198,7 @@ export function LayoutViewer({
               </g>
             ) : (
               <text fill="#9ca3af" fontSize="8" x="10" y="20">
-                Upload and process a DXF to see geometry here.
+                {t("viewer.empty")}
               </text>
             )}
           </g>
