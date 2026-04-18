@@ -1,0 +1,20 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5174,
+      "autoPort": true,
+      "cwd": "C:\\Users\\Aleksey.Chernov\\Desktop\\Бюджет закупок\\CSV_Export\\nesting_saas_mvp\\frontend"
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\Aleksey.Chernov\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "runtimeArgs": ["dev_server.py"],
+      "port": 8000,
+      "cwd": "C:\\Users\\Aleksey.Chernov\\Desktop\\Бюджет закупок\\CSV_Export\\nesting_saas_mvp"
+    }
+  ]
+}

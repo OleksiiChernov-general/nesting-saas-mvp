@@ -21,6 +21,8 @@ from app.geometry import clean_geometry as clean_geometry_impl, polygon_from_poi
 from app.models import JobState, NestingJob
 from app.native_runner import NativeRunnerError, ensure_native_result_ready, run_native_poc
 from app.nesting import PartSpec, SheetSpec, nest
+from app.nesting_v2 import run_nesting as run_nesting_v2
+from app.nesting_v3 import run_nesting as run_nesting_v3
 from app.schemas import (
     CleanGeometryRequest,
     CleanGeometryResponse,
@@ -529,6 +531,81 @@ def run_timeout_probe(seconds: float, timeout_seconds: float) -> float:
     return float(completed.stdout.strip())
 
 
+def _adapt_v2_result(raw_result: dict, mode: str) -> dict:
+    metrics = raw_result.get("metrics") if isinstance(raw_result.get("metrics"), dict) else {}
+    sheet = raw_result.get("sheet") if isinstance(raw_result.get("sheet"), dict) else {}
+    placements = raw_result.get("placements") if isinstance(raw_result.get("placements"), list) else []
+    parts = raw_result.get("parts") if isinstance(raw_result.get("parts"), list) else []
+
+    total_sheet_area = float(metrics.get("sheet_area") or 0.0)
+    used_area = float(metrics.get("used_area") or 0.0)
+    scrap_area = float(metrics.get("waste_area") or max(total_sheet_area - used_area, 0.0))
+    return {
+        "sheet": sheet,
+        "placements": placements,
+        "parts": parts,
+        "summary": {
+            "total_parts": int(metrics.get("total_parts") or 0),
+            "placed_parts": int(metrics.get("placed_parts") or 0),
+            "yield_ratio": float(metrics.get("yield_ratio") or 0.0),
+            "used_area": used_area,
+            "scrap_area": scrap_area,
+            "total_sheet_area": total_sheet_area,
+            "mode": mode,
+            "engine": raw_result.get("engine", "v2"),
+        },
+    }
+
+
+def _run_v2_engine(
+    *,
+    payload: NestingJobCreateRequest,
+    parts: list[PartSpec],
+    sheets: list[SheetSpec],
+    timeout_seconds: float,
+) -> dict:
+    if not sheets:
+        raise ValueError("At least one sheet is required for the v2 nesting engine")
+
+    raw_result = run_nesting_v2(
+        parts=parts,
+        sheet=sheets[0],
+        settings={
+            **payload.params.model_dump(),
+            "mode": payload.mode,
+            "time_limit_sec": timeout_seconds,
+        },
+    )
+    return _adapt_v2_result(raw_result, payload.mode)
+
+
+def _run_v3_engine(
+    *,
+    payload: NestingJobCreateRequest,
+    parts: list[PartSpec],
+    sheets: list[SheetSpec],
+    timeout_seconds: float,
+) -> dict:
+    """v3 engine: multi-start randomised greedy + rotation local search."""
+    if not sheets:
+        raise ValueError("At least one sheet is required for the v3 nesting engine")
+
+    raw_result = run_nesting_v3(
+        parts=parts,
+        sheet=sheets[0],
+        settings={
+            **payload.params.model_dump(),
+            "mode": payload.mode,
+            "time_limit_sec": timeout_seconds,
+        },
+    )
+    adapted = _adapt_v2_result(raw_result, payload.mode)
+    v3_info = raw_result.get("v3_info")
+    if isinstance(v3_info, dict):
+        adapted.setdefault("summary", {})["v3_info"] = v3_info
+    return adapted
+
+
 def _run_nesting_backend(
     *,
     job: NestingJob,
@@ -544,7 +621,37 @@ def _run_nesting_backend(
     fallback_reason: str | None = None
     remaining_for_python: float | None = None
 
-    if requested_backend == "native":
+    if requested_backend == "v3":
+        remaining = _remaining_timeout_seconds(deadline)
+        if remaining <= 0:
+            raise EngineRunTimeout(
+                f"v3 backend timed out after {job_timeout_seconds:.1f}s before execution began",
+                engine_backend="v3",
+                timeout_seconds=job_timeout_seconds,
+            )
+        update_job_status(
+            job.id,
+            state=JobState.RUNNING,
+            progress=0.50,
+            status_message="v3 engine started (multi-start greedy + rotation local search).",
+        )
+        return _run_v3_engine(payload=payload, parts=parts, sheets=sheets, timeout_seconds=remaining), "v3", None
+    elif requested_backend == "v2":
+        remaining = _remaining_timeout_seconds(deadline)
+        if remaining <= 0:
+            raise EngineRunTimeout(
+                f"v2 backend timed out after {job_timeout_seconds:.1f}s before execution began",
+                engine_backend="v2",
+                timeout_seconds=job_timeout_seconds,
+            )
+        update_job_status(
+            job.id,
+            state=JobState.RUNNING,
+            progress=0.50,
+            status_message="v2 engine started.",
+        )
+        return _run_v2_engine(payload=payload, parts=parts, sheets=sheets, timeout_seconds=remaining), "v2", None
+    elif requested_backend == "native":
         if not settings.native_poc_enabled:
             fallback_reason = "Native backend requested, but NESTING_NATIVE_POC_ENABLED is false."
             logger.warning("Native backend disabled for job %s; falling back to python engine", job.id)
