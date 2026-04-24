@@ -14,11 +14,14 @@ from app.nesting_v2_cache import (
     OccupiedBoundsIndex,
     PartPlacementCache,
 )
+from app.core.nfp import NFPCache, get_nfp_touch_positions
 
 
 DEFAULT_TIME_LIMIT_SEC = 5.0
-DEFAULT_ITERATION_CAP = 10_000
-DEFAULT_CANDIDATE_CAP = 32
+DEFAULT_ITERATION_CAP = 200_000
+CANDIDATE_CAP_BASE = 200
+CANDIDATE_CAP_PER_PART = 4
+DEFAULT_CANDIDATE_CAP = CANDIDATE_CAP_BASE  # backward-compat alias used by v3
 DEFAULT_GRID_STEP = 10.0
 DEFAULT_REFILL_PASS_CAP = 8
 DEFAULT_ANCHOR_PROBE_MULTIPLIER = 4
@@ -157,9 +160,45 @@ def _profiled(profiler: _ProfileRecorder | None, label: str, callback: Any) -> A
         return callback()
 
 
+def _compute_adaptive_grid_step(parts_raw: list[Any]) -> float:
+    from math import gcd
+    dims: list[int] = []
+    for p in parts_raw:
+        pd = p if isinstance(p, dict) else _coerce_mapping(p)
+        poly_val = pd.get("polygon") or {}
+        if hasattr(poly_val, "exterior"):
+            minx, miny, maxx, maxy = poly_val.bounds
+            w, h = maxx - minx, maxy - miny
+        else:
+            pts = poly_val.get("points") if isinstance(poly_val, dict) else []
+            if not pts:
+                continue
+            xs = [pt["x"] for pt in pts]
+            ys = [pt["y"] for pt in pts]
+            w, h = max(xs) - min(xs), max(ys) - min(ys)
+        if w > 0:
+            dims.append(max(1, round(w)))
+        if h > 0:
+            dims.append(max(1, round(h)))
+    if not dims:
+        return DEFAULT_GRID_STEP
+    # GCD of all bounding-box dimensions → step divides every part side exactly,
+    # preventing fractional-pixel gaps that block tight rectangular packing.
+    g = dims[0]
+    for d in dims[1:]:
+        g = gcd(g, d)
+    return float(max(1, min(int(DEFAULT_GRID_STEP), g)))
+
+
 def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
     started_at = time.perf_counter()
     settings = settings or {}
+    if "candidate_cap" not in settings:
+        _tmp = _normalize_parts(parts)
+        n = sum(p.quantity for p in _tmp)
+        settings = {**settings, "candidate_cap": min(CANDIDATE_CAP_BASE + n * CANDIDATE_CAP_PER_PART, 500)}
+    if "grid_step" not in settings:
+        settings = {**settings, "grid_step": _compute_adaptive_grid_step(parts)}
     profile_store = settings.get("profile_sections")
     profiler = _ProfileRecorder(profile_store) if isinstance(profile_store, dict) else None
     limits = _normalize_limits(settings)
@@ -171,10 +210,13 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
     occupied_shapes: list[OccupiedPlacement] = []
     occupied_index = OccupiedBoundsIndex()
     part_cache = PartPlacementCache()
+    use_nfp = bool(settings.get("use_nfp", False))
+    nfp_cache: NFPCache | None = NFPCache() if use_nfp else None
     iterations = 0
     timed_out = False
     progress_made = True
-    remaining = _build_work_queue(normalized_parts)
+    sort_strategy = str(settings.get("sort_strategy", "default"))
+    remaining = _build_work_queue(normalized_parts, strategy=sort_strategy)
     refill_pass = 0
 
     while remaining and progress_made and not timed_out and refill_pass < DEFAULT_REFILL_PASS_CAP:
@@ -203,6 +245,8 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
                     refill_pass=refill_pass,
                     part_cache=part_cache,
                     profiler=profiler,
+                    occupied_shapes=occupied_shapes if use_nfp else None,
+                    nfp_cache=nfp_cache,
                 ):
                     iterations += 1
                     if validate_placement(
@@ -314,6 +358,8 @@ def prepare_candidates(
     refill_pass: int = 0,
     part_cache: PartPlacementCache | None = None,
     profiler: _ProfileRecorder | None = None,
+    occupied_shapes: list["OccupiedPlacement"] | None = None,
+    nfp_cache: NFPCache | None = None,
 ) -> list[PlacementCandidate]:
     ranked_candidates: dict[tuple[float, float, int], tuple[tuple[float, ...], PlacementCandidate]] = {}
     cache = part_cache or PartPlacementCache()
@@ -360,8 +406,121 @@ def prepare_candidates(
             if existing is None or sort_key < existing[0]:
                 ranked_candidates[key] = (sort_key, candidate)
 
+        # NFP touch-point candidates (geometrically optimal positions)
+        if occupied_shapes:
+            _add_nfp_candidates(
+                ranked_candidates=ranked_candidates,
+                part=part,
+                rotation=rotation,
+                envelope=envelope,
+                bounds=bounds,
+                sheet=sheet,
+                occupied=occupied,
+                occupied_shapes=occupied_shapes,
+                refill_pass=refill_pass,
+                cache=cache,
+                nfp_cache=nfp_cache,
+                cap=limits.candidate_cap,
+                occupied_extent_max_x=occupied_extent_max_x,
+                occupied_extent_max_y=occupied_extent_max_y,
+            )
+
     ordered = sorted(ranked_candidates.values(), key=lambda item: item[0])
     return [candidate for _, candidate in ordered[: limits.candidate_cap]]
+
+
+def _poly_canonical_key(pts: tuple[tuple[float, float], ...]) -> tuple:
+    """Stable hashable key from polygon points (rounded to 4 dp)."""
+    return tuple((round(x, 4), round(y, 4)) for x, y in pts)
+
+
+def _add_nfp_candidates(
+    *,
+    ranked_candidates: dict,
+    part: "NormalizedPart",
+    rotation: int,
+    envelope: "CachedRotationEnvelope",
+    bounds: "Bounds",
+    sheet: "NormalizedSheet",
+    occupied: list["Bounds"],
+    occupied_shapes: list["OccupiedPlacement"],
+    refill_pass: int,
+    cache: "PartPlacementCache",
+    nfp_cache: "NFPCache | None",
+    cap: int,
+    occupied_extent_max_x: float,
+    occupied_extent_max_y: float,
+) -> None:
+    """Inject NFP-boundary touch positions into ranked_candidates.
+
+    Skipped for axis-aligned rectangles — the existing AABB anchor sources
+    already find all optimal touch positions for rectangles exactly.
+    """
+    if _is_axis_aligned_rectangle(part):
+        return  # AABB anchors handle rectangles; NFP overhead not justified
+
+    try:
+        # Canonical polygon for new part at this rotation (reference at 0, 0)
+        pts = tuple((x - envelope.min_x, y - envelope.min_y) for x, y in envelope.points)
+        new_poly = Polygon(pts)
+        if not new_poly.is_valid:
+            new_poly = new_poly.buffer(0)
+        if new_poly.is_empty:
+            return
+        new_key = _poly_canonical_key(pts)
+
+        # Build (canonical_poly, canonical_key, tx, ty) list for occupied shapes
+        occupied_items = []
+        for occ in occupied_shapes:
+            if occ.polygon is None:
+                continue
+            tx, ty = occ.bounds.min_x, occ.bounds.min_y
+            cano_pts = tuple((x - tx, y - ty) for x, y in occ.polygon_points)
+            cano_key = _poly_canonical_key(cano_pts)
+            cano_poly = Polygon(cano_pts)
+            if cano_poly.is_valid and not cano_poly.is_empty:
+                occupied_items.append((cano_poly, cano_key, tx, ty))
+
+        if not occupied_items:
+            return
+
+        # Limit to avoid O(N) overhead as occupied list grows
+        _MAX_NFP_OCC = 8
+        if len(occupied_items) > _MAX_NFP_OCC:
+            occupied_items = occupied_items[-_MAX_NFP_OCC:]
+
+        positions = get_nfp_touch_positions(
+            part_poly=new_poly,
+            part_poly_key=new_key,
+            part_w=envelope.width,
+            part_h=envelope.height,
+            sheet_w=sheet.width,
+            sheet_h=sheet.height,
+            occupied_items=occupied_items,
+            nfp_cache=nfp_cache,
+            max_positions=cap,
+        )
+
+        for x, y in positions:
+            x, y = round(x, 6), round(y, 6)
+            if x < 0 or y < 0 or x + envelope.width > sheet.width + 1e-9 or y + envelope.height > sheet.height + 1e-9:
+                continue
+            key = (x, y, rotation)
+            candidate = PlacementCandidate(x=x, y=y, rotation=rotation)
+            sort_key = _candidate_rank_key(
+                part, candidate, sheet, occupied,
+                0,
+                refill_pass,
+                part_bounds=bounds,
+                part_cache=cache,
+                occupied_extent_max_x=occupied_extent_max_x,
+                occupied_extent_max_y=occupied_extent_max_y,
+            )
+            existing = ranked_candidates.get(key)
+            if existing is None or sort_key < existing[0]:
+                ranked_candidates[key] = (sort_key, candidate)
+    except Exception:
+        pass  # NFP failures never break placement
 
 
 def validate_placement(
@@ -444,7 +603,14 @@ def _normalize_parts(parts: list[Any]) -> list[NormalizedPart]:
         if part_data.get("enabled", True) is False:
             continue
         polygon_payload = part_data.get("polygon") or {}
-        points_payload = polygon_payload.get("points") if isinstance(polygon_payload, dict) else polygon_payload
+        if hasattr(polygon_payload, "exterior"):
+            # Shapely Polygon (e.g. from PartSpec.polygon) — extract coords
+            pts = list(polygon_payload.exterior.coords)
+            points_payload = [{"x": x, "y": y} for x, y in pts]
+        elif isinstance(polygon_payload, dict):
+            points_payload = polygon_payload.get("points")
+        else:
+            points_payload = polygon_payload
         points = _normalize_points(points_payload)
         bounds = _bounds_from_points(points)
         area = _polygon_area(points)
@@ -488,8 +654,8 @@ def _normalize_sheet(sheet: Any) -> NormalizedSheet:
     )
 
 
-def _build_work_queue(parts: list[NormalizedPart]) -> list[NormalizedPart]:
-    ordered_parts = _sort_parts_for_pass(parts, refill_pass=0)
+def _build_work_queue(parts: list[NormalizedPart], strategy: str = "default") -> list[NormalizedPart]:
+    ordered_parts = _sort_parts_for_pass(parts, refill_pass=0, strategy=strategy)
     queue: list[NormalizedPart] = []
     for part in ordered_parts:
         queue.extend([part] * part.quantity)
@@ -500,7 +666,27 @@ def _order_remaining_for_pass(parts: list[NormalizedPart], refill_pass: int) -> 
     return sorted(parts, key=lambda part: _part_sort_key(part, refill_pass=refill_pass))
 
 
-def _sort_parts_for_pass(parts: list[NormalizedPart], refill_pass: int) -> list[NormalizedPart]:
+def _sort_parts_for_pass(
+    parts: list[NormalizedPart],
+    refill_pass: int,
+    strategy: str = "default",
+) -> list[NormalizedPart]:
+    if strategy == "area_asc":
+        return sorted(parts, key=lambda p: (round(p.area, 6), p.part_id))
+    if strategy == "area_desc":
+        return sorted(parts, key=lambda p: (-round(p.area, 6), p.part_id))
+    if strategy == "perimeter_desc":
+        return sorted(parts, key=lambda p: (-round((p.bounds.width + p.bounds.height) * 2, 6), p.part_id))
+    if strategy == "aspect_desc":
+        return sorted(parts, key=lambda p: (
+            -round(max(p.bounds.width, p.bounds.height) / max(min(p.bounds.width, p.bounds.height), 1e-9), 6),
+            p.part_id,
+        ))
+    if strategy == "aspect_asc":
+        return sorted(parts, key=lambda p: (
+            round(max(p.bounds.width, p.bounds.height) / max(min(p.bounds.width, p.bounds.height), 1e-9), 6),
+            p.part_id,
+        ))
     return sorted(parts, key=lambda part: _part_sort_key(part, refill_pass=refill_pass))
 
 

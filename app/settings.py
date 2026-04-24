@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     job_heartbeat_interval_seconds: float = 2.0
     stale_job_timeout_seconds: int = 900
     max_compute_seconds: float = 60.0
-    engine_backend: Literal["python", "native"] = "python"
+    engine_backend: Literal["python", "native", "v2", "v3"] = "v3"
     native_poc_enabled: bool = False
     native_poc_executable: Path = BASE_DIR / "native" / "libnest2d-poc" / "build" / NATIVE_POC_NAME
 

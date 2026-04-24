@@ -78,16 +78,28 @@ from app.nesting_v2 import (
 _V3_ENGINE_TAG = "v3"
 
 # Budget split
-_MULTI_START_FRACTION = 0.60    # fraction of budget for multi-start greedy
-_LOCAL_SEARCH_FRACTION = 0.40   # fraction of budget for rotation local search
+_MULTI_START_FRACTION  = 0.10   # quick diversity search (find best ordering)
+_POLISH_FRACTION       = 0.80   # full-quality V2 run on the best ordering
+_LOCAL_SEARCH_FRACTION = 0.10   # rotation local search to polish the result
 
 # Multi-start
 _MAX_RESTARTS = 20              # hard cap on greedy restarts
-_MIN_RESTART_BUDGET = 0.25      # minimum seconds per restart
+_MIN_RESTART_BUDGET_BASE = 0.5  # minimum seconds per restart (small jobs)
+_MIN_RESTART_BUDGET_PER_PART = 0.02  # extra seconds per total part instance
 
 # All 8 rotation angles; extended set used for odd restarts
 _CARDINAL_ROTATIONS = [0, 90, 180, 270]
 _ALL_ROTATIONS = [0, 45, 90, 135, 180, 225, 270, 315]
+
+# Part-ordering strategies cycled across restarts for diversity
+_SORT_STRATEGIES = [
+    "default",        # irregular-first, then shape-efficiency + area desc
+    "area_desc",      # largest area first
+    "perimeter_desc", # largest perimeter first (good for strips)
+    "area_asc",       # smallest area first (fills corners early)
+    "aspect_desc",    # most elongated first
+    "aspect_asc",     # most square first
+]
 
 
 # ─────────────────────────── public entry point ───────────────────────────────
@@ -110,14 +122,15 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
     do_rot_search = bool(settings.get("rotation_search", True))
 
     ms_budget = total_budget * _MULTI_START_FRACTION
+    polish_budget = total_budget * _POLISH_FRACTION
     ls_budget = total_budget * _LOCAL_SEARCH_FRACTION
 
     normalized_parts = _normalize_parts(parts)
     normalized_sheet = _normalize_sheet(sheet)
 
-    # ── Phase 1: Multi-start randomised greedy ────────────────────────────────
+    # ── Phase 1: Quick multi-start — find the best part ordering ─────────────
     if do_multi_start:
-        best_result, ms_stats = _multi_start_greedy(
+        scout_result, ms_stats, best_parts_order = _multi_start_greedy(
             parts=parts,
             sheet=sheet,
             normalized_parts=normalized_parts,
@@ -128,12 +141,23 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
             started_at=started_at,
         )
     else:
-        best_result = _run_nesting_v2(
+        scout_result = _run_nesting_v2(
             parts=parts, sheet=sheet, settings={**settings, "time_limit_sec": ms_budget}
         )
         ms_stats = {"restarts": 1, "best_restart": 0}
+        best_parts_order = list(parts)
 
-    # ── Phase 2: Rotation local search ───────────────────────────────────────
+    # ── Phase 2: Full-quality V2 run on the best ordering ────────────────────
+    polished = _run_nesting_v2(
+        parts=best_parts_order,
+        sheet=sheet,
+        settings={**settings, "time_limit_sec": polish_budget},
+    )
+    scout_yield = _yield_ratio(scout_result.get("placements", []), normalized_sheet.area)
+    polish_yield = _yield_ratio(polished.get("placements", []), normalized_sheet.area)
+    best_result = polished if polish_yield >= scout_yield else scout_result
+
+    # ── Phase 3: Rotation local search ───────────────────────────────────────
     if do_rot_search and ls_budget >= 0.1:
         ls_deadline = time.perf_counter() + ls_budget
         best_result, ls_stats = _rotation_local_search(
@@ -168,28 +192,36 @@ def _multi_start_greedy(
     requested_angles: list[int],
     budget_sec: float,
     started_at: float,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], list[Any]]:
     """
     Run the v2 greedy multiple times with randomised part order.
-    Odd-numbered restarts also try extended rotation angles (if any are
-    requested beyond the 4 cardinal ones).
+    Returns (best_scout_result, stats, best_parts_order).
+    The best_parts_order is used by the caller for the full-quality polish pass.
     """
     deadline = started_at + budget_sec
     rng = random.Random()
 
     best_result: dict[str, Any] | None = None
     best_yield = -1.0
+    best_shuffled_parts: list[Any] = list(parts)
     restart = 0
     best_restart = 0
 
-    # Restart 0: canonical v2 order (no shuffle) — always run first
-    for restart in range(_MAX_RESTARTS):
-        remaining_time = deadline - time.perf_counter()
-        if remaining_time < _MIN_RESTART_BUDGET:
-            break
+    # Adaptive per-restart budget: larger jobs need more time per restart
+    n_total_parts = sum(p.quantity for p in normalized_parts)
+    min_restart_budget = max(
+        _MIN_RESTART_BUDGET_BASE,
+        n_total_parts * _MIN_RESTART_BUDGET_PER_PART,
+    )
+    # How many restarts can fit in the budget?
+    adaptive_max_restarts = max(1, min(_MAX_RESTARTS, int(budget_sec / min_restart_budget)))
+    per_restart_budget = budget_sec / adaptive_max_restarts
 
-        per_restart_budget = min(remaining_time, budget_sec / max(_MAX_RESTARTS, 3))
-        per_restart_budget = max(per_restart_budget, _MIN_RESTART_BUDGET)
+    # Restart 0: canonical v2 order (no shuffle) — always run first
+    for restart in range(adaptive_max_restarts):
+        remaining_time = deadline - time.perf_counter()
+        if remaining_time < 0.05:  # less than 50ms left — not worth starting
+            break
 
         # Shuffle part order for restarts > 0
         shuffled_parts: list[Any]
@@ -199,6 +231,9 @@ def _multi_start_greedy(
             shuffled_parts = list(parts)
             rng.shuffle(shuffled_parts)
 
+        # Cycle through sort strategies for diversity across restarts
+        strategy = _SORT_STRATEGIES[restart % len(_SORT_STRATEGIES)]
+
         # Extended rotations on odd restarts (when caller requested diagonals)
         use_extended = (restart % 2 == 1) and any(a % 90 != 0 for a in requested_angles)
         rotation_override = requested_angles if use_extended else _CARDINAL_ROTATIONS
@@ -207,6 +242,7 @@ def _multi_start_greedy(
             **settings,
             "time_limit_sec": per_restart_budget,
             "rotation": rotation_override,
+            "sort_strategy": strategy,
         }
 
         try:
@@ -224,9 +260,17 @@ def _multi_start_greedy(
             best_yield = y
             best_result = result
             best_restart = restart
+            best_shuffled_parts = shuffled_parts
 
-    assert best_result is not None
-    return best_result, {"restarts": restart + 1, "best_restart": best_restart, "best_yield": round(best_yield, 4)}
+    if best_result is None:
+        # No restarts completed (budget exhausted before loop ran) — fall back to canonical pass
+        best_result = _run_nesting_v2(parts=list(parts), sheet=sheet, settings={**settings, "time_limit_sec": max(budget_sec, 0.1)})
+        best_shuffled_parts = list(parts)
+    return (
+        best_result,
+        {"restarts": restart + 1, "best_restart": best_restart, "best_yield": round(best_yield, 4)},
+        best_shuffled_parts,
+    )
 
 
 # ─────────────────────────── rotation local search ───────────────────────────

@@ -36,18 +36,18 @@ def test_worker_processes_job(client, sample_job_payload):
         assert job.finished_at is not None
 
 
-def test_default_backend_uses_python_when_request_omits_engine_backend(client, sample_job_payload):
+def test_default_backend_uses_v3_when_request_omits_engine_backend(client, sample_job_payload):
     create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
     assert create_response.status_code == 202
     job_id = create_response.json()["id"]
 
-    assert process_next_job(timeout=1) is True
+    assert process_next_job(timeout=5) is True
 
     result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
     assert result_response.status_code == 200
     result_body = result_response.json()
-    assert result_body["engine_backend_requested"] == "python"
-    assert result_body["engine_backend_used"] == "python"
+    assert result_body["engine_backend_requested"] == "v3"
+    assert result_body["engine_backend_used"] == "v3"
     assert result_body["engine_fallback_reason"] is None
 
 
@@ -593,7 +593,8 @@ def test_native_backend_falls_back_to_python_automatically(client, sample_job_pa
     assert result_body["layouts"]
 
 
-def test_explicit_python_backend_uses_python_path(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+def test_explicit_python_backend_routes_to_v3(client, sample_job_payload, monkeypatch: pytest.MonkeyPatch):
+    # "python" is a legacy alias that now transparently routes to the v3 engine.
     native_calls = 0
 
     def fake_native_runner(*args, **kwargs):
@@ -607,13 +608,13 @@ def test_explicit_python_backend_uses_python_path(client, sample_job_payload, mo
     create_response = client.post("/v1/nesting/jobs", json=sample_job_payload)
     job_id = create_response.json()["id"]
 
-    assert process_next_job(timeout=1) is True
+    assert process_next_job(timeout=5) is True
 
     result_response = client.get(f"/v1/nesting/jobs/{job_id}/result")
     assert result_response.status_code == 200
     result_body = result_response.json()
     assert result_body["engine_backend_requested"] == "python"
-    assert result_body["engine_backend_used"] == "python"
+    assert result_body["engine_backend_used"] == "v3"   # "python" is now a v3 alias
     assert result_body["engine_fallback_reason"] is None
     assert native_calls == 0
 

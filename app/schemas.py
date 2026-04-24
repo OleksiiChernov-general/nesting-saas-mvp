@@ -201,7 +201,7 @@ class NestingJobCreateRequest(BaseModel):
     batch: BatchInput | None = None
     params: NestingParams = Field(default_factory=NestingParams)
     previous_job_id: UUID | None = None
-    engine_backend: Literal["python", "native"] | None = None
+    engine_backend: Literal["python", "native", "v2", "v3"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -387,8 +387,8 @@ class JobResponse(BaseModel):
     previous_yield: float = 0.0
     best_yield: float = 0.0
     improvement_percent: float = 0.0
-    engine_backend_requested: Literal["python", "native"] | None = None
-    engine_backend_used: Literal["python", "native"] | None = None
+    engine_backend_requested: Literal["python", "native", "v2", "v3"] | None = None
+    engine_backend_used: Literal["python", "native", "v2", "v3"] | None = None
     engine_fallback_reason: str | None = None
 
 
@@ -519,8 +519,8 @@ class NestingResultResponse(BaseModel):
     improvement_percent: float = 0.0
     timed_out: bool = False
     optimization_history: list[dict] = Field(default_factory=list)
-    engine_backend_requested: Literal["python", "native"] | None = None
-    engine_backend_used: Literal["python", "native"] | None = None
+    engine_backend_requested: Literal["python", "native", "v2", "v3"] | None = None
+    engine_backend_used: Literal["python", "native", "v2", "v3"] | None = None
     engine_fallback_reason: str | None = None
 
     model_config = {"populate_by_name": True}

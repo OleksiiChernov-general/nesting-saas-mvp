@@ -47,7 +47,7 @@ def test_create_job(client, sample_job_payload):
         assert job.payload["parts"][0]["quantity"] == 2
         assert job.payload["parts"][0]["order_id"] == "order-a"
         assert job.payload["batch"]["orders"][0]["order_id"] == "order-a"
-        assert job.payload["engine_backend_requested"] == "python"
+        assert job.payload["engine_backend_requested"] == "v3"
 
 
 def test_create_job_accepts_optional_engine_backend_override(client, sample_job_payload):

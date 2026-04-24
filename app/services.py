@@ -534,20 +534,132 @@ def run_timeout_probe(seconds: float, timeout_seconds: float) -> float:
 def _adapt_v2_result(raw_result: dict, mode: str) -> dict:
     metrics = raw_result.get("metrics") if isinstance(raw_result.get("metrics"), dict) else {}
     sheet = raw_result.get("sheet") if isinstance(raw_result.get("sheet"), dict) else {}
-    placements = raw_result.get("placements") if isinstance(raw_result.get("placements"), list) else []
+    raw_placements = raw_result.get("placements") if isinstance(raw_result.get("placements"), list) else []
     parts = raw_result.get("parts") if isinstance(raw_result.get("parts"), list) else []
 
     total_sheet_area = float(metrics.get("sheet_area") or 0.0)
     used_area = float(metrics.get("used_area") or 0.0)
     scrap_area = float(metrics.get("waste_area") or max(total_sheet_area - used_area, 0.0))
+    yield_value = float(metrics.get("yield_ratio") or metrics.get("yield") or 0.0)
+    placed_parts = int(metrics.get("placed_parts") or metrics.get("placed_count") or len(raw_placements))
+    status = str(raw_result.get("status") or "SUCCEEDED")
+
+    # Normalize placements: extract width/height from bounds for PlacementResponse
+    placements: list[dict] = []
+    for pl in raw_placements:
+        if not isinstance(pl, dict):
+            continue
+        bounds = pl.get("bounds") or {}
+        w = float(pl.get("width") or bounds.get("width") or 0.0)
+        h = float(pl.get("height") or bounds.get("height") or 0.0)
+        placements.append({**pl, "width": w, "height": h})
+
+    # Build unplaced_parts from per-part remaining_quantity
+    unplaced_parts = [
+        p["part_id"] for p in parts
+        if isinstance(p, dict) and int(p.get("remaining_quantity") or 0) > 0
+    ]
+    # Status: PARTIAL when some requested parts couldn't be placed
+    has_unplaced = bool(unplaced_parts) or int(metrics.get("unplaced_parts") or 0) > 0
+    if status == "SUCCEEDED" and has_unplaced:
+        status = "PARTIAL"
+    warnings: list[str] = []
+    if unplaced_parts:
+        warnings.append(f"Parts with remaining quantity stays above zero: {', '.join(unplaced_parts)}")
+
+    # Build layouts list (V2/V3 only use one sheet, group all placements into one layout)
+    sheet_id = sheet.get("sheet_id", "sheet-1")
+    sheet_w = float(sheet.get("width") or 0.0)
+    sheet_h = float(sheet.get("height") or 0.0)
+    if placements:
+        layout_used_area = sum(float(pl.get("area") or 0.0) for pl in placements)
+        layout_scrap = max(sheet_w * sheet_h - layout_used_area, 0.0)
+        layouts: list[dict] = [{
+            "sheet_id": sheet_id,
+            "instance": 1,
+            "width": sheet_w,
+            "height": sheet_h,
+            "used_area": layout_used_area,
+            "scrap_area": layout_scrap,
+            "placements": placements,
+        }]
+        layouts_used = 1
+    else:
+        layouts = []
+        layouts_used = 0
+
+    # Compute offcuts from placement polygons (approximated rectangular strips)
+    offcuts: list[dict] = []
+    offcut_summary: dict | None = None
+    try:
+        from app.offcuts import summarize_sheet_offcuts as _summarize_sheet
+        from shapely.geometry import Polygon as _SPoly
+        placement_polys = []
+        for pl in placements:
+            pts = (pl.get("polygon") or {}).get("points") or []
+            if pts:
+                try:
+                    placement_polys.append(_SPoly([(p["x"], p["y"]) for p in pts]))
+                except Exception:
+                    pass
+        if sheet_w > 0 and sheet_h > 0:
+            _offcuts, _summary = _summarize_sheet(
+                sheet_id=sheet_id,
+                instance=1,
+                sheet_width=sheet_w,
+                sheet_height=sheet_h,
+                used_area=layout_used_area if placements else 0.0,
+                scrap_area=layout_scrap if placements else sheet_w * sheet_h,
+                placement_polygons=placement_polys,
+            )
+            offcuts = _offcuts
+            total_leftover = float(_summary.get("scrap_area") or 0.0)
+            reusable = float(_summary.get("reusable_leftover_area") or 0.0)
+            offcut_summary = {
+                **_summary,
+                "total_leftover_area": total_leftover,
+                "reusable_area_estimate": reusable,
+                "leftover_summaries": [
+                    {
+                        "sheet_id": o.get("sheet_id", sheet_id),
+                        "instance": o.get("instance", 1),
+                        "width": float((o.get("bounds") or {}).get("width") or 0.0),
+                        "height": float((o.get("bounds") or {}).get("height") or 0.0),
+                        "area": float(o.get("area") or 0.0),
+                        "approximate": o.get("approximation") is not False,
+                        "source": str(o.get("source") or "unknown"),
+                    }
+                    for o in offcuts
+                ],
+            }
+    except Exception:
+        pass
+
     return {
-        "sheet": sheet,
+        "status": status,
+        "mode": mode,
+        "yield": yield_value,
+        "yield_ratio": yield_value,
+        "scrap_ratio": round(1.0 - yield_value, 6) if total_sheet_area > 0 else 0.0,
+        "scrap_area": scrap_area,
+        "used_area": used_area,
+        "total_sheet_area": total_sheet_area,
+        "parts_placed": placed_parts,
+        "total_parts_placed": placed_parts,
+        "layouts_used": layouts_used,
+        "layouts": layouts,
         "placements": placements,
         "parts": parts,
+        "sheet": sheet,
+        "unplaced_parts": unplaced_parts,
+        "warnings": warnings,
+        "offcuts": offcuts,
+        "offcut_summary": offcut_summary,
+        "timed_out": bool(raw_result.get("timed_out")),
         "summary": {
-            "total_parts": int(metrics.get("total_parts") or 0),
-            "placed_parts": int(metrics.get("placed_parts") or 0),
-            "yield_ratio": float(metrics.get("yield_ratio") or 0.0),
+            "total_parts": int(metrics.get("total_parts") or len(parts)),
+            "placed_parts": placed_parts,
+            "yield_ratio": yield_value,
             "used_area": used_area,
             "scrap_area": scrap_area,
             "total_sheet_area": total_sheet_area,
@@ -618,6 +730,11 @@ def _run_nesting_backend(
     job_timeout_seconds: float,
 ) -> tuple[dict, str, str | None]:
     requested_backend = str((job.payload or {}).get("engine_backend_requested") or payload.engine_backend or settings.engine_backend)
+    if requested_backend == "python":
+        requested_backend = "v3"
+    # fill_sheet mode is only supported by V1; fall back for V2/V3
+    if payload.mode == "fill_sheet" and requested_backend in ("v2", "v3"):
+        requested_backend = "python"
     fallback_reason: str | None = None
     remaining_for_python: float | None = None
 
