@@ -210,6 +210,9 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
     occupied_shapes: list[OccupiedPlacement] = []
     occupied_index = OccupiedBoundsIndex()
     part_cache = PartPlacementCache()
+    if "use_nfp" not in settings:
+        has_irregular = any(not p.is_axis_aligned_rectangle for p in normalized_parts)
+        settings = {**settings, "use_nfp": has_irregular}
     use_nfp = bool(settings.get("use_nfp", False))
     nfp_cache: NFPCache | None = NFPCache() if use_nfp else None
     iterations = 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import subprocess
@@ -554,18 +555,37 @@ def _adapt_v2_result(raw_result: dict, mode: str) -> dict:
         h = float(pl.get("height") or bounds.get("height") or 0.0)
         placements.append({**pl, "width": w, "height": h})
 
+    if mode == "fill_sheet":
+        # Strip the internal high-cap quantity from the parts output so callers see
+        # semantically correct values: requested=1 (user specified none), remaining=0.
+        parts = [
+            {**p, "requested_quantity": 1, "remaining_quantity": 0}
+            if isinstance(p, dict) else p
+            for p in parts
+        ]
+
     # Build unplaced_parts from per-part remaining_quantity
     unplaced_parts = [
         p["part_id"] for p in parts
         if isinstance(p, dict) and int(p.get("remaining_quantity") or 0) > 0
     ]
-    # Status: PARTIAL when some requested parts couldn't be placed
-    has_unplaced = bool(unplaced_parts) or int(metrics.get("unplaced_parts") or 0) > 0
-    if status == "SUCCEEDED" and has_unplaced:
-        status = "PARTIAL"
     warnings: list[str] = []
-    if unplaced_parts:
-        warnings.append(f"Parts with remaining quantity stays above zero: {', '.join(unplaced_parts)}")
+    if mode == "fill_sheet":
+        # In fill_sheet mode we use a large dummy quantity cap — remaining_quantity
+        # being > 0 is expected and does NOT indicate failure.  Mark SUCCEEDED as
+        # long as at least one part was placed; only fall back to PARTIAL if nothing
+        # could be placed at all.
+        if status != "FAILED" and placed_parts == 0:
+            status = "PARTIAL"
+        elif status not in ("FAILED", "PARTIAL"):
+            status = "SUCCEEDED"
+    else:
+        # Status: PARTIAL when some requested parts couldn't be placed
+        has_unplaced = bool(unplaced_parts) or int(metrics.get("unplaced_parts") or 0) > 0
+        if status == "SUCCEEDED" and has_unplaced:
+            status = "PARTIAL"
+        if unplaced_parts:
+            warnings.append(f"Parts with remaining quantity stays above zero: {', '.join(unplaced_parts)}")
 
     # Build layouts list (V2/V3 only use one sheet, group all placements into one layout)
     sheet_id = sheet.get("sheet_id", "sheet-1")
@@ -669,6 +689,14 @@ def _adapt_v2_result(raw_result: dict, mode: str) -> dict:
     }
 
 
+_FILL_SHEET_QUANTITY = 2000  # max copies per part in fill_sheet mode; time limit stops the loop
+
+
+def _fill_sheet_parts(parts: list[PartSpec]) -> list[PartSpec]:
+    """Return parts with large quantity so V2/V3 fill the sheet until time runs out."""
+    return [dataclasses.replace(p, quantity=_FILL_SHEET_QUANTITY) for p in parts]
+
+
 def _run_v2_engine(
     *,
     payload: NestingJobCreateRequest,
@@ -679,8 +707,9 @@ def _run_v2_engine(
     if not sheets:
         raise ValueError("At least one sheet is required for the v2 nesting engine")
 
+    run_parts = _fill_sheet_parts(parts) if payload.mode == "fill_sheet" else parts
     raw_result = run_nesting_v2(
-        parts=parts,
+        parts=run_parts,
         sheet=sheets[0],
         settings={
             **payload.params.model_dump(),
@@ -702,8 +731,9 @@ def _run_v3_engine(
     if not sheets:
         raise ValueError("At least one sheet is required for the v3 nesting engine")
 
+    run_parts = _fill_sheet_parts(parts) if payload.mode == "fill_sheet" else parts
     raw_result = run_nesting_v3(
-        parts=parts,
+        parts=run_parts,
         sheet=sheets[0],
         settings={
             **payload.params.model_dump(),
@@ -732,9 +762,6 @@ def _run_nesting_backend(
     requested_backend = str((job.payload or {}).get("engine_backend_requested") or payload.engine_backend or settings.engine_backend)
     if requested_backend == "python":
         requested_backend = "v3"
-    # fill_sheet mode is only supported by V1; fall back for V2/V3
-    if payload.mode == "fill_sheet" and requested_backend in ("v2", "v3"):
-        requested_backend = "python"
     fallback_reason: str | None = None
     remaining_for_python: float | None = None
 
