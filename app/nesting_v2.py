@@ -162,7 +162,9 @@ def _profiled(profiler: _ProfileRecorder | None, label: str, callback: Any) -> A
 
 def _compute_adaptive_grid_step(parts_raw: list[Any]) -> float:
     from math import gcd
-    dims: list[int] = []
+    dims_float: list[float] = []
+    all_near_integer = True
+
     for p in parts_raw:
         pd = p if isinstance(p, dict) else _coerce_mapping(p)
         poly_val = pd.get("polygon") or {}
@@ -177,17 +179,34 @@ def _compute_adaptive_grid_step(parts_raw: list[Any]) -> float:
             ys = [pt["y"] for pt in pts]
             w, h = max(xs) - min(xs), max(ys) - min(ys)
         if w > 0:
-            dims.append(max(1, round(w)))
+            dims_float.append(w)
+            if abs(w - round(w)) > 0.1:
+                all_near_integer = False
         if h > 0:
-            dims.append(max(1, round(h)))
-    if not dims:
+            dims_float.append(h)
+            if abs(h - round(h)) > 0.1:
+                all_near_integer = False
+
+    if not dims_float:
         return DEFAULT_GRID_STEP
-    # GCD of all bounding-box dimensions → step divides every part side exactly,
-    # preventing fractional-pixel gaps that block tight rectangular packing.
-    g = dims[0]
-    for d in dims[1:]:
-        g = gcd(g, d)
-    return float(max(1, min(int(DEFAULT_GRID_STEP), g)))
+
+    if all_near_integer:
+        # All parts have integer-aligned bounding boxes (rectangles, right-angle
+        # polygons).  GCD ensures each grid row/column snaps exactly to a part
+        # boundary, preventing fractional-pixel gaps.
+        int_dims = [max(1, round(d)) for d in dims_float]
+        g = int_dims[0]
+        for d in int_dims[1:]:
+            g = gcd(g, d)
+        return float(max(1, min(int(DEFAULT_GRID_STEP), g)))
+
+    # Non-integer bounding boxes (isosceles triangles, circles, …).
+    # GCD collapses to 1 here (e.g. GCD(50, 17)=1 for a 50×16.583 triangle),
+    # making the grid ~1M positions on a large sheet.  Instead use the smallest
+    # part dimension as the step: the grid never tries to squeeze into a space
+    # narrower than the part itself, and NFP supplies the exact touch positions.
+    min_dim = min(dims_float)
+    return float(max(1.0, min_dim))
 
 
 def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1564,8 +1583,10 @@ def _candidate_rank_key(
             float(candidate.rotation),
         )
     if _is_round_part(part):
+        n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
         return (
             float(refill_pass),
+            float(n_aabb_overlaps),
             round(extent_area, 6),
             -round(contact_span, 6),
             -float(contact_score),
@@ -1574,20 +1595,20 @@ def _candidate_rank_key(
             float(source_priority),
             float(rotation_rank),
             float(candidate.rotation),
-            float(_irregular_overlap_penalty(part, candidate_bounds, occupied, candidate.rotation)),
         )
     if refill_pass <= 0:
+        n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
         return (
             float(refill_pass),
-            float(source_priority),
+            float(n_aabb_overlaps),
+            round(extent_area, 6),
+            -round(contact_span, 6),
+            -float(contact_score),
             round(candidate_bounds.min_y, 6),
             round(candidate_bounds.min_x, 6),
             float(rotation_rank),
             float(candidate.rotation),
-            float(_irregular_overlap_penalty(part, candidate_bounds, occupied, candidate.rotation)),
-            round(extent_area, 6),
-            -round(contact_span, 6),
-            -float(contact_score),
+            float(source_priority),
         )
     return (
         float(refill_pass),
