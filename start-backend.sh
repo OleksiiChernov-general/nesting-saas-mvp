@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+echo "=== NESTORA ENGINE VERSION 2.4.0 ==="
 
 python -m app.worker &
 worker_pid=$!
