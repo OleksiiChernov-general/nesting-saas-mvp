@@ -678,9 +678,21 @@ def _normalize_sheet(sheet: Any) -> NormalizedSheet:
 
 def _build_work_queue(parts: list[NormalizedPart], strategy: str = "default") -> list[NormalizedPart]:
     ordered_parts = _sort_parts_for_pass(parts, refill_pass=0, strategy=strategy)
-    queue: list[NormalizedPart] = []
-    for part in ordered_parts:
-        queue.extend([part] * part.quantity)
+    if len(ordered_parts) <= 1:
+        queue: list[NormalizedPart] = []
+        for part in ordered_parts:
+            queue.extend([part] * part.quantity)
+        return queue
+    # Multiple part types: interleave instances round-robin so every type gets
+    # placement attempts before the time budget runs out.  Sequential packing
+    # (all of type A before any of type B) causes later types to be starved when
+    # quantities are large (e.g. fill_sheet mode sets quantity=2000 per part).
+    max_qty = max(p.quantity for p in ordered_parts)
+    queue = []
+    for i in range(max_qty):
+        for part in ordered_parts:
+            if i < part.quantity:
+                queue.append(part)
     return queue
 
 
