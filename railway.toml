@@ -1,0 +1,8 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "./start-backend.sh"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
