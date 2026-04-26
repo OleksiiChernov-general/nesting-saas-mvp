@@ -17,6 +17,8 @@ from app.nesting_v2_cache import (
 from app.core.nfp import NFPCache, get_nfp_touch_positions
 
 
+_ENGINE_VERSION = "2.4.0"  # n_aabb_overlaps guard in all candidate-rank branches
+
 DEFAULT_TIME_LIMIT_SEC = 5.0
 DEFAULT_ITERATION_CAP = 200_000
 CANDIDATE_CAP_BASE = 200
@@ -334,6 +336,7 @@ def run_nesting(parts: list[Any], sheet: Any, settings: dict[str, Any] | None = 
     return {
         "status": result_status,
         "engine": "v2",
+        "engine_version": _ENGINE_VERSION,
         "placements": placements,
         "metrics": metrics,
         "sheet": {
@@ -1431,6 +1434,7 @@ def _build_metrics(
         "limit_reason": limit_reason,
         "hit_iteration_cap": timed_out and limit_reason == "iteration_cap",
         "hit_time_limit": timed_out and limit_reason == "time_limit_sec",
+        "engine_version": _ENGINE_VERSION,
     }
 
 
@@ -1622,8 +1626,10 @@ def _candidate_rank_key(
             float(candidate.rotation),
             float(source_priority),
         )
+    n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
     return (
         float(refill_pass),
+        float(n_aabb_overlaps),
         round(extent_area, 6),
         -round(contact_span, 6),
         -float(contact_score),
