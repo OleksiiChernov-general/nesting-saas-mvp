@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import router
 from app.db import init_db, wait_for_database
+from app.nesting_v2 import _ENGINE_VERSION
 from app.queue import wait_for_redis
 from app.settings import get_settings
 from app.storage import ensure_storage
@@ -38,7 +39,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "engine_version": _ENGINE_VERSION}
 
     return app
 

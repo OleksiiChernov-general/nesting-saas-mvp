@@ -10,7 +10,9 @@ def test_health_endpoint(client):
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["engine_version"] == "2.4.0"
 
 
 def test_create_job(client, sample_job_payload):
