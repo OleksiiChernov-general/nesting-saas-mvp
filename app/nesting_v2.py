@@ -17,7 +17,7 @@ from app.nesting_v2_cache import (
 from app.core.nfp import NFPCache, get_nfp_touch_positions
 
 
-_ENGINE_VERSION = "2.4.0"  # n_aabb_overlaps guard in all candidate-rank branches
+_ENGINE_VERSION = "2.6.0"  # triangle: min_y/min_x-first fill order ensures left→right, bottom→top interlocking
 
 DEFAULT_TIME_LIMIT_SEC = 5.0
 DEFAULT_ITERATION_CAP = 200_000
@@ -1599,10 +1599,14 @@ def _candidate_rank_key(
             float(candidate.rotation),
         )
     if _is_round_part(part):
-        n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
+        # For circles, hexagonal positions have overlapping bounding boxes with neighbours,
+        # so raw AABB-overlap count wrongly penalises the densest valid placements.
+        # Instead rank by how many same-size circles the candidate touches (center distance ≈ 2r),
+        # preferring the position that fits snugly among the most neighbours.
+        circle_contacts = _circle_neighbour_count(candidate_bounds, part, occupied)
         return (
             float(refill_pass),
-            float(n_aabb_overlaps),
+            -circle_contacts,            # more neighbours = tighter pack = better
             round(extent_area, 6),
             -round(contact_span, 6),
             -float(contact_score),
@@ -1611,9 +1615,35 @@ def _candidate_rank_key(
             float(source_priority),
             float(rotation_rank),
             float(candidate.rotation),
+        )
+    if _is_triangle_part(part):
+        # Triangles interlock by sharing an edge (AABBs overlap, polygons only touch).
+        # Fill order: bottom-to-top, left-to-right.  At a given (min_y, min_x) position,
+        # prefer interlocking (n_raw=1, penalty=0) over non-interlocking (n_raw=0).
+        #
+        # • n_aabb_overlaps = max(0, n_raw - 1): single AABB overlap = interlocking candidate
+        #   (0 penalty); 2+ overlaps = row already full (pushes behind next-row positions).
+        # • min_y / min_x before -n_raw: forces left-to-right, bottom-to-top fill so row 2
+        #   starts from x=0 rather than from the high-contact-span right-wall anchor.
+        # • -n_raw after min_x: within the same grid cell, prefer interlocking (n_raw=1)
+        #   over non-interlocking (n_raw=0) since it yields better packing density.
+        n_raw = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
+        n_aabb_overlaps = max(0, n_raw - 1)
+        return (
+            float(refill_pass),
+            float(n_aabb_overlaps),
+            round(candidate_bounds.min_y, 6),  # bottom rows first
+            round(candidate_bounds.min_x, 6),  # left to right
+            float(-n_raw),                     # interlocking contact bonus
+            round(extent_area, 6),
+            -round(contact_span, 6),
+            -float(contact_score),
+            float(rotation_rank),
+            float(candidate.rotation),
+            float(source_priority),
         )
     if refill_pass <= 0:
-        n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
+        n_aabb_overlaps = _irregular_overlap_penalty(part, candidate_bounds, occupied, candidate.rotation)
         return (
             float(refill_pass),
             float(n_aabb_overlaps),
@@ -1626,7 +1656,7 @@ def _candidate_rank_key(
             float(candidate.rotation),
             float(source_priority),
         )
-    n_aabb_overlaps = sum(1 for placed in occupied if _bounds_overlap(candidate_bounds, placed))
+    n_aabb_overlaps = _irregular_overlap_penalty(part, candidate_bounds, occupied, candidate.rotation)
     return (
         float(refill_pass),
         float(n_aabb_overlaps),
@@ -1722,6 +1752,32 @@ def _resulting_extent_area(
     return max_x * max_y
 
 
+def _circle_neighbour_count(
+    candidate_bounds: Bounds,
+    part: NormalizedPart,
+    occupied: list[Bounds],
+) -> int:
+    """
+    Count how many already-placed circles are at touching distance from the candidate.
+    Two circles touch when center-to-center distance ≈ diameter (within 5 % tolerance).
+    A higher count means a tighter hexagonal neighbourhood — preferred in ranking.
+    """
+    diameter = part.bounds.width          # bounding box side == diameter for circles
+    r = diameter / 2.0
+    cx = candidate_bounds.min_x + r
+    cy = candidate_bounds.min_y + r
+    tol = diameter * 0.05                 # 5 % of diameter — generous for float geometry
+    count = 0
+    for placed in occupied:
+        px = placed.min_x + r
+        py = placed.min_y + r
+        dist_sq = (cx - px) ** 2 + (cy - py) ** 2
+        touch_sq = diameter * diameter    # (2r)²
+        if abs(dist_sq - touch_sq) <= 2 * diameter * tol:
+            count += 1
+    return count
+
+
 def _irregular_overlap_penalty(
     part: NormalizedPart,
     candidate_bounds: Bounds,
@@ -1730,14 +1786,17 @@ def _irregular_overlap_penalty(
 ) -> int:
     if not _is_irregular_part(part) or _is_round_part(part):
         return 0
-    penalty = 0
+    raw = 0
     for placed in occupied:
-        if not _bounds_overlap(candidate_bounds, placed):
-            continue
-        if _is_triangle_part(part) and rotation == 180 and _same_size_bounds(candidate_bounds, placed):
-            continue
-        penalty += 1
-    return penalty
+        if _bounds_overlap(candidate_bounds, placed):
+            raw += 1
+    if _is_triangle_part(part):
+        # A triangle touching one placed triangle has AABB overlap but possibly zero polygon
+        # overlap (interlocking pair sharing an edge).  Subtract 1 from the raw count so that
+        # single-overlap positions rank alongside fresh placements; only 2+ overlaps (row
+        # completely packed) are penalised, which allows the engine to switch rows correctly.
+        return max(0, raw - 1)
+    return raw
 
 
 def _shape_efficiency(part: NormalizedPart) -> float:
