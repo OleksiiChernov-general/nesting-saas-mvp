@@ -7,10 +7,11 @@ ENV PYTHONPATH=/app
 
 WORKDIR /app
 
+# cache-bust: 2026-05-04-v2.6.0
+RUN echo "2026-05-04-v2.6.0" > /build-stamp.txt
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN echo "build-stamp: 2026-05-04-v2.6.0"
 COPY app ./app
 COPY start-backend.sh ./start-backend.sh
 COPY tests ./tests
